@@ -1,4 +1,7 @@
 import streamlit as st
+from database import create_tables
+
+create_tables()
 
 st.set_page_config(
     page_title="Irene's Online Stationery Store",
@@ -10,4 +13,4 @@ st.title("🛍️ Irene's Online Stationery Store")
 
 st.write("Welcome to my online stationery store!")
 
-st.success("My Streamlit store is working!")
+st.success("Database connected!")
