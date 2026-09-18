@@ -187,6 +187,79 @@ def admin_dashboard():
 
         st.rerun()
 # -----------------------------
+# CUSTOMER STORE
+# -----------------------------
+
+def customer_store():
+
+    st.title("🛍️ Irene's Online Stationery Store")
+
+    st.write("Welcome to the store!")
+
+    from database import get_connection
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT id, name, description, price, inventory, image_url
+        FROM products
+    """)
+
+    products = cursor.fetchall()
+
+    connection.close()
+
+    if not products:
+        st.info("There are currently no products in the store.")
+
+    else:
+
+        st.subheader("✨ Our Products")
+
+        for product in products:
+
+            product_id = product[0]
+            name = product[1]
+            description = product[2]
+            price = product[3]
+            inventory = product[4]
+            image_url = product[5]
+
+            with st.container():
+
+                col1, col2 = st.columns([1, 2])
+
+                with col1:
+
+                    if image_url:
+                        st.image(
+                            image_url,
+                            use_container_width=True
+                        )
+
+                with col2:
+
+                    st.subheader(name)
+
+                    st.write(description)
+
+                    st.write(f"💰 **${price:.2f}**")
+
+                    if inventory > 0:
+                        st.write(
+                            f"📦 {inventory} available"
+                        )
+
+                        st.button(
+                            "🛒 Add to Cart",
+                            key=f"add_{product_id}"
+                        )
+
+                    else:
+                        st.error("Out of stock")
+
+                st.divider()# -----------------------------
 # MAIN APP
 # -----------------------------
 
@@ -197,3 +270,7 @@ if not st.session_state.logged_in:
 elif st.session_state.role == "admin":
 
     admin_dashboard()
+
+elif st.session_state.role == "customer":
+
+    customer_store()
