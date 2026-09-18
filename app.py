@@ -81,26 +81,111 @@ def admin_dashboard():
 
     st.subheader("Store Management")
 
-    col1, col2, col3 = st.columns(3)
+    option = st.selectbox(
+        "Choose an action",
+        [
+            "Select an action...",
+            "➕ Add Product",
+            "✏️ Edit Products",
+            "📦 Manage Inventory"
+        ]
+    )
 
-    with col1:
-        st.button("➕ Add Product")
+    # -----------------------------
+    # ADD PRODUCT
+    # -----------------------------
 
-    with col2:
-        st.button("✏️ Edit Products")
+    if option == "➕ Add Product":
 
-    with col3:
-        st.button("📦 Manage Inventory")
+        st.header("➕ Add a New Product")
+
+        product_name = st.text_input("Product Name")
+
+        description = st.text_area("Product Description")
+
+        price = st.number_input(
+            "Price",
+            min_value=0.0,
+            step=0.01
+        )
+
+        inventory = st.number_input(
+            "Inventory / Stock",
+            min_value=0,
+            step=1
+        )
+
+        image_url = st.text_input(
+            "Product Image URL"
+        )
+
+        if st.button("Add Product to Store"):
+
+            if product_name.strip() == "":
+                st.error("Please enter a product name.")
+
+            else:
+
+                from database import get_connection
+
+                connection = get_connection()
+                cursor = connection.cursor()
+
+                cursor.execute(
+                    """
+                    INSERT INTO products
+                    (name, description, price, inventory, image_url)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        product_name,
+                        description,
+                        price,
+                        inventory,
+                        image_url
+                    )
+                )
+
+                connection.commit()
+                connection.close()
+
+                st.success(
+                    f"✅ {product_name} was added to your store!"
+                )
+
+    # -----------------------------
+    # EDIT PRODUCTS
+    # -----------------------------
+
+    elif option == "✏️ Edit Products":
+
+        st.header("✏️ Edit Products")
+
+        st.info(
+            "Product editing will be added next."
+        )
+
+    # -----------------------------
+    # INVENTORY
+    # -----------------------------
+
+    elif option == "📦 Manage Inventory":
+
+        st.header("📦 Manage Inventory")
+
+        st.info(
+            "Inventory management will be added next."
+        )
 
     st.divider()
 
     if st.button("Log Out"):
+
         st.session_state.logged_in = False
         st.session_state.username = None
         st.session_state.role = None
+
         st.rerun()
-
-
 # -----------------------------
 # MAIN APP
 # -----------------------------
