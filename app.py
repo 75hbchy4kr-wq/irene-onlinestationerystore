@@ -40,31 +40,145 @@ if "role" not in st.session_state:
 # LOGIN PAGE
 # -----------------------------
 
+
 def login_page():
+
+    from database import get_connection
 
     st.title("🛍️ Irene's Online Stationery Store")
 
-    st.subheader("Login")
+    page = st.radio(
+        "Account",
+        ["Login", "Sign Up"],
+        horizontal=True
+    )
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    # CUSTOMER SIGN UP
+    if page == "Sign Up":
+        st.subheader("Create a Customer Account")
 
-    if st.button("Login"):
+        username = st.text_input(
+            "Choose a Username",
+            key="signup_username"
+        )
 
-        # Admin login
-        admin_username = st.secrets["admin"]["username"]
-        admin_password = st.secrets["admin"]["password"]
+        password = st.text_input(
+            "Choose a Password",
+            type="password",
+            key="signup_password"
+        )
 
-        if username == admin_username and password == admin_password:
+        confirm_password = st.text_input(
+            "Confirm Password",
+            type="password"
+        )
 
-            st.session_state.logged_in = True
-            st.session_state.username = username
-            st.session_state.role = "admin"
+        if st.button("Create Account"):
 
-            st.rerun()
+            username = username.strip()
 
-        else:
-            st.error("Incorrect username or password.")
+            if not username or not password:
+                st.error("Please complete all fields.")
+
+            elif len(password) < 8:
+                st.error("Password must be at least 8 characters.")
+
+            elif password != confirm_password:
+                st.error("Passwords do not match.")
+
+            else:
+                connection = get_connection()
+                cursor = connection.cursor()
+
+                cursor.execute(
+                    "SELECT id FROM users WHERE username = ?",
+                    (username,)
+                )
+
+                existing_user = cursor.fetchone()
+
+                if existing_user:
+                    st.error("Username already exists.")
+
+                else:
+                    hashed_password = bcrypt.hashpw(
+                        password.encode("utf-8"),
+                        bcrypt.gensalt()
+                    ).decode("utf-8")
+
+                    cursor.execute(
+                        """
+                        INSERT INTO users (username, password, role)
+                        VALUES (?, ?, ?)
+                        """,
+                        (username, hashed_password, "customer")
+                    )
+
+                    connection.commit()
+                    st.success(
+                        "Account created! Select Login to sign in."
+                    )
+
+                connection.close()
+
+    # LOGIN
+    else:
+        st.subheader("Login")
+
+        username = st.text_input("Username")
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
+
+        if st.button("Login"):
+
+            # ADMIN LOGIN
+            admin_username = st.secrets["admin"]["username"]
+            admin_password = st.secrets["admin"]["password"]
+
+            if (
+                username == admin_username
+                and password == admin_password
+            ):
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.session_state.role = "admin"
+                st.rerun()
+
+            # CUSTOMER LOGIN
+            else:
+                connection = get_connection()
+                cursor = connection.cursor()
+
+                cursor.execute(
+                    """
+                    SELECT password, role
+                    FROM users
+                    WHERE username = ?
+                    """,
+                    (username.strip(),)
+                )
+
+                user = cursor.fetchone()
+                connection.close()
+
+                if (
+                    user
+                    and user[1] == "customer"
+                    and bcrypt.checkpw(
+                        password.encode("utf-8"),
+                        user[0].encode("utf-8")
+                    )
+                ):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username.strip()
+                    st.session_state.role = "customer"
+                    st.rerun()
+
+                else:
+                    st.error("Incorrect username or password.")
+7
 
 
 # -----------------------------
