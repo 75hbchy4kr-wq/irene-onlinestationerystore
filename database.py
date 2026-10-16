@@ -1,6 +1,12 @@
+
+from pathlib import Path
 import sqlite3
 
-DATABASE = "store.db"
+DATABASE = Path(__file__).resolve().parent / "store.db"
+
+
+def get_connection():
+    return sqlite3.connect(str(DATABASE))
 
 
 def get_connection():
