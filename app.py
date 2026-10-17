@@ -1,12 +1,17 @@
 import streamlit as st
 import bcrypt
 
-from database import create_tables
+from database import create_tables, check_database, get_connection
 
-from database import check_database
+st.set_page_config(
+    page_title="Irene's Online Stationery Store",
+    page_icon="🛍️",
+    layout="wide"
+)
+
+create_tables()
 
 st.write("Products currently in database:", check_database())
-
 
 
 # -----------------------------
