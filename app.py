@@ -263,13 +263,115 @@ def admin_dashboard():
     # EDIT PRODUCTS
     # -----------------------------
 
+   
     elif option == "✏️ Edit Products":
 
         st.header("✏️ Edit Products")
 
-        st.info(
-            "Product editing will be added next."
-        )
+        from database import get_connection
+
+        connection = get_connection()
+        products = connection.execute(
+            """
+            SELECT id, name, description, price, inventory, image_url
+            FROM products
+            ORDER BY name
+            """
+        ).fetchall()
+        connection.close()
+
+        if not products:
+            st.info("There are no products to edit.")
+
+        else:
+            product_options = {
+                f"{product[1]} (ID: {product[0]})": product[0]
+                for product in products
+            }
+
+            selected = st.selectbox(
+                "Choose a product",
+                list(product_options.keys()),
+                key="edit_product_select"
+            )
+
+            product_id = product_options[selected]
+
+            product = next(
+                p for p in products if p[0] == product_id
+            )
+
+            with st.form("edit_product_form"):
+
+                name = st.text_input(
+                    "Product Name",
+                    value=product[1]
+                )
+
+                description = st.text_area(
+                    "Description",
+                    value=product[2] or ""
+                )
+
+                price = st.number_input(
+                    "Price",
+                    min_value=0.01,
+                    value=max(float(product[3]), 0.01),
+                    step=0.01
+                )
+
+                inventory = st.number_input(
+                    "Stock Quantity",
+                    min_value=0,
+                    value=max(int(product[4]), 0),
+                    step=1
+                )
+
+                image_url = st.text_input(
+                    "Product Image URL",
+                    value=product[5] or ""
+                )
+
+                submitted = st.form_submit_button(
+                    "Save Changes"
+                )
+
+            if submitted:
+
+                if not name.strip():
+                    st.error("Product name cannot be empty.")
+
+                else:
+                    connection = get_connection()
+
+                    try:
+                        connection.execute(
+                            """
+                            UPDATE products
+                            SET name = ?,
+                                description = ?,
+                                price = ?,
+                                inventory = ?,
+                                image_url = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                name.strip(),
+                                description,
+                                price,
+                                inventory,
+                                image_url.strip(),
+                                product_id
+                            )
+                        )
+                        connection.commit()
+
+                    finally:
+                        connection.close()
+
+                    st.success("Product updated successfully!")
+                    st.rerun()
+
 
     # -----------------------------
     # INVENTORY
