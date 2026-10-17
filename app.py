@@ -3,6 +3,11 @@ import bcrypt
 
 from database import create_tables
 
+from database import check_database
+
+st.write("Products currently in database:", check_database())
+
+
 
 # -----------------------------
 # DATABASE
