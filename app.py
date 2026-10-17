@@ -194,6 +194,7 @@ def admin_dashboard():
             "➕ Add Product",
             "✏️ Edit Products",
             "📦 Manage Inventory"
+            "🗑️ Delete Products"
         ]
     )
 
