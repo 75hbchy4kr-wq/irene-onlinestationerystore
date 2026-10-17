@@ -190,52 +190,15 @@ def login_page():
 # ADMIN DASHBOARD
 # -----------------------------
 
-def admin_dashboard(
-    st.subheader("Delete Products")
 
-    connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute("SELECT id, name FROM products ORDER BY name")
-    products = cursor.fetchall()
-    connection.close()
-
-    if products:
-        product_options = {
-            f"{name} (ID: {product_id})": product_id
-            for product_id, name in products
-        }
-
-        selected_product = st.selectbox(
-            "Choose a product to delete",
-            list(product_options.keys()),
-            key="delete_product"
-        )
-
-        if st.button("Delete Product", type="primary"):
-            product_id = product_options[selected_product]
-
-            connection = get_connection()
-            cursor = connection.cursor()
-            cursor.execute(
-                "DELETE FROM products WHERE id = ?",
-                (product_id,)
-            )
-            connection.commit()
-            connection.close()
-
-            st.success("Product deleted successfully!")
-            st.rerun()
-    else:
-        st.info("There are no products to delete.")
-):
+def admin_dashboard():
 
     st.title("👑 Admin Dashboard")
 
     st.write(f"Welcome, **{st.session_state.username}**!")
 
     st.divider()
-
+    
     st.subheader("Store Management")
 
     option = st.selectbox(
