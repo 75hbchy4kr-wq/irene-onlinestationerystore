@@ -378,13 +378,65 @@ def admin_dashboard():
     # INVENTORY
     # -----------------------------
 
+  
     elif option == "📦 Manage Inventory":
-
         st.header("📦 Manage Inventory")
 
-        st.info(
-            "Inventory management will be added next."
-        )
+        from database import get_connection
+
+        connection = get_connection()
+        try:
+            products = connection.execute(
+                "SELECT id, name, price, inventory FROM products ORDER BY name"
+            ).fetchall()
+        finally:
+            connection.close()
+
+        if not products:
+            st.info("There are no products in your store yet.")
+        else:
+            st.subheader("Current Stock")
+
+            for product_id, name, price, inventory in products:
+                with st.container(border=True):
+                    col1, col2 = st.columns([3, 1])
+
+                    with col1:
+                        st.write(f"**{name}**")
+                        st.caption(f"Price: ${price:.2f}")
+
+                        if inventory == 0:
+                            st.error("Out of stock")
+                        elif inventory <= 5:
+                            st.warning(f"Low stock: {inventory} left")
+                        else:
+                            st.write(f"Stock: {inventory} units")
+
+                    with col2:
+                        with st.form(f"stock_form_{product_id}"):
+                            new_stock = st.number_input(
+                                "Update stock",
+                                min_value=0,
+                                value=max(int(inventory), 0),
+                                step=1,
+                                key=f"stock_input_{product_id}"
+                            )
+
+                            save_stock = st.form_submit_button("Save Stock")
+
+                        if save_stock:
+                            connection = get_connection()
+                            try:
+                                connection.execute(
+                                    "UPDATE products SET inventory = ? WHERE id = ?",
+                                    (int(new_stock), product_id)
+                                )
+                                connection.commit()
+                            finally:
+                                connection.close()
+
+                            st.success(f"Updated stock for {name}!")
+                            st.rerun()
 
     # -----------------------------
     # DELETE PRODUCTS
