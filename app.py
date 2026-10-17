@@ -14,18 +14,6 @@ create_tables()
 st.write("Products currently in database:", check_database())
 
 
-
-# -----------------------------
-# PAGE SETTINGS
-# -----------------------------
-
-st.set_page_config(
-    page_title="Irene's Online Stationery Store",
-    page_icon="🛍️",
-    layout="wide"
-)
-
-
 # -----------------------------
 # SESSION STATE
 # -----------------------------
