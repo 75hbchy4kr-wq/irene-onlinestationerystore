@@ -183,13 +183,6 @@ def admin_dashboard():
 
     st.write(f"Welcome, **{st.session_state.username}**!")
 
-    
-    elif option == "🛒 View Store":
-        st.header("🛒 Store Preview")
-        st.caption("This is how customers see your products.")
-
-        customer_store()
-
     st.divider()
     
     st.subheader("Store Management")
@@ -506,7 +499,13 @@ def admin_dashboard():
 
                     st.success("Product deleted successfully!")
                     st.rerun()
+                    
 
+    elif option == "🛒 View Store":
+        st.header("🛒 Store Preview")
+        st.caption("This is how customers see your products.")
+        customer_store()
+        
     st.divider()
 
     if st.button("Log Out"):
