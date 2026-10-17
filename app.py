@@ -14,12 +14,6 @@ create_tables()
 st.write("Products currently in database:", check_database())
 
 
-# -----------------------------
-# DATABASE
-# -----------------------------
-
-create_tables()
-
 
 # -----------------------------
 # PAGE SETTINGS
