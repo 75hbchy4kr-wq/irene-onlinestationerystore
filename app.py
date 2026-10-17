@@ -386,6 +386,67 @@ def admin_dashboard():
             "Inventory management will be added next."
         )
 
+    # -----------------------------
+    # DELETE PRODUCTS
+    # -----------------------------
+
+    elif option == "🗑️ Delete Products":
+
+        st.header("🗑️ Delete Products")
+
+        from database import get_connection
+
+        connection = get_connection()
+
+        try:
+            products = connection.execute(
+                "SELECT id, name FROM products ORDER BY name"
+            ).fetchall()
+        finally:
+            connection.close()
+
+        if not products:
+            st.info("There are no products to delete.")
+
+        else:
+            product_options = {
+                f"{name} (ID: {product_id})": product_id
+                for product_id, name in products
+            }
+
+            selected_product = st.selectbox(
+                "Choose a product to delete",
+                list(product_options.keys()),
+                key="delete_product_select"
+            )
+
+            confirm = st.checkbox(
+                "I confirm I want to delete this product.",
+                key="confirm_delete_product"
+            )
+
+            if st.button("Delete Product", type="primary"):
+
+                if not confirm:
+                    st.warning("Please confirm before deleting.")
+
+                else:
+                    product_id = product_options[selected_product]
+
+                    connection = get_connection()
+
+                    try:
+                        connection.execute(
+                            "DELETE FROM products WHERE id = ?",
+                            (product_id,)
+                        )
+                        connection.commit()
+                    finally:
+                        connection.close()
+
+                    st.success("Product deleted successfully!")
+                    st.rerun()
+
     st.divider()
 
     if st.button("Log Out"):
