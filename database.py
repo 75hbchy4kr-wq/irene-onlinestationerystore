@@ -8,17 +8,16 @@ DATABASE = Path(__file__).resolve().parent / "store.db"
 def get_connection():
     return sqlite3.connect(str(DATABASE))
 
-    
+
 def check_database():
     connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM products")
-    product_count = cursor.fetchone()[0]
-
-    connection.close()
-    return product_count
-
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT COUNT(*) FROM products")
+        product_count = cursor.fetchone()[0]
+        return product_count
+    finally:
+        connection.close()
 
 
 def create_tables():
