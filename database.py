@@ -10,7 +10,17 @@ def get_connection():
 
 
 def get_connection():
-    return sqlite3.connect(DATABASE)
+    
+def check_database():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM products")
+    product_count = cursor.fetchone()[0]
+
+    connection.close()
+    return product_count
+
 
 
 def create_tables():
