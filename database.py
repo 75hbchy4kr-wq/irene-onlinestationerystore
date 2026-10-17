@@ -8,8 +8,6 @@ DATABASE = Path(__file__).resolve().parent / "store.db"
 def get_connection():
     return sqlite3.connect(str(DATABASE))
 
-
-def get_connection():
     
 def check_database():
     connection = get_connection()
