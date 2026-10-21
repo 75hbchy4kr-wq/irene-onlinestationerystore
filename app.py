@@ -55,11 +55,14 @@ def get_user_by_username(username):
         ).fetchone()
 
 
+
 def count_admins():
     with get_connection() as connection:
-        return connection.execute(
-            "SELECT COUNT(*) AS count FROM users WHERE role = 'admin'"
-        ).fetchone()["count"]
+        result = connection.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin'"
+        ).fetchone()
+        return result[0]
+
 
 
 def create_user(username, password, role="customer"):
