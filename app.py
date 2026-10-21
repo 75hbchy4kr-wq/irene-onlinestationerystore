@@ -518,39 +518,32 @@ def admin_dashboard():
         st.session_state.role = None
 
         st.rerun()
+
 # -----------------------------
 # CUSTOMER STORE
 # -----------------------------
 
 def customer_store():
-
     st.title("🛍️ Irene's Online Stationery Store")
-
     st.write("Welcome to the store!")
 
     from database import get_connection
 
     connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute("""
-        SELECT id, name, description, price, inventory, image_url
-        FROM products
-    """)
-
-    products = cursor.fetchall()
-
-    connection.close()
+    try:
+        products = connection.execute("""
+            SELECT id, name, description, price, inventory, image_url
+            FROM products
+        """).fetchall()
+    finally:
+        connection.close()
 
     if not products:
         st.info("There are currently no products in the store.")
-
     else:
-
         st.subheader("✨ Our Products")
 
         for product in products:
-
             product_id = product[0]
             name = product[1]
             description = product[2]
@@ -559,11 +552,9 @@ def customer_store():
             image_url = product[5]
 
             with st.container():
-
                 col1, col2 = st.columns([1, 2])
 
                 with col1:
-
                     if image_url:
                         st.image(
                             image_url,
@@ -571,14 +562,10 @@ def customer_store():
                         )
 
                 with col2:
-
                     st.subheader(name)
-
                     st.write(description)
-
                     st.write(f"💰 **${price:.2f}**")
 
-                    
                     if inventory > 0:
                         st.write(f"📦 {inventory} available")
 
@@ -589,59 +576,27 @@ def customer_store():
                             if "cart" not in st.session_state:
                                 st.session_state.cart = {}
 
-                            current_quantity = st.session_state.cart.get(product_id, 0)
+                            current_quantity = st.session_state.cart.get(
+                                product_id, 0
+                            )
 
                             if current_quantity < inventory:
-                                st.session_state.cart[product_id] = current_quantity + 1
+                                st.session_state.cart[product_id] = (
+                                    current_quantity + 1
+                                )
                                 st.success(f"{name} added to your cart!")
                             else:
-                                st.warning("You've reached the available stock limit.")
+                                st.warning(
+                                    "You've reached the available stock limit."
+                                )
 
                             st.rerun()
-
-                    else:
-                        st.error("Out of stock")
-                                            if inventory > 0:
-                        st.write(f"📦 {inventory} available")
-
-                        if st.button(
-                            "🛒 Add to Cart",
-                            key=f"add_{product_id}"
-                        ):
-                            if "cart" not in st.session_state:
-                                st.session_state.cart = {}
-
-                            current_quantity = st.session_state.cart.get(product_id, 0)
-
-                            if current_quantity < inventory:
-                                st.session_state.cart[product_id] = current_quantity + 1
-                                st.success(f"{name} added to your cart!")
-                            else:
-                                st.warning("You've reached the available stock limit.")
-
-                            st.rerun()
-
                     else:
                         st.error("Out of stock")
 
-        st.session_state.cart = {}
+                st.divider()
 
-    if product_id in st.session_state.cart:
-        if st.session_state.cart[product_id] < inventory:
-            st.session_state.cart[product_id] += 1
-            st.success(f"Added another {name} to your cart!")
-        else:
-            st.warning("You've reached the available stock limit.")
-    else:
-        st.session_state.cart[product_id] = 1
-        st.success(f"{name} added to your cart!")
-
-    st.rerun()
-
-                    else:
-                        st.error("Out of stock")
-
-                st.divider()# -----------------------------
+# -----------------------------
 # MAIN APP
 # -----------------------------
 
