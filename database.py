@@ -4,12 +4,14 @@ import sqlite3
 DATABASE = Path(__file__).resolve().parent / "store.db"
 
 
+
 def get_connection():
     connection = sqlite3.connect(str(DATABASE), timeout=15)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 15000")
     return connection
+
 
 
 def create_tables():
