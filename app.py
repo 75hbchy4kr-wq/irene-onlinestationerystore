@@ -27,6 +27,9 @@ if "username" not in st.session_state:
 if "role" not in st.session_state:
     st.session_state.role = None
 
+if "cart" not in st.session_state:
+    st.session_state.cart = {}
+
 
 # -----------------------------
 # LOGIN PAGE
