@@ -586,9 +586,7 @@ def customer_store():
                                 )
                                 st.success(f"{name} added to your cart!")
                             else:
-                                st.warning(
-                                    "You've reached the available stock limit."
-                                )
+                                st.warning("You've reached the available stock limit.")
 
                             st.rerun()
                     else:
