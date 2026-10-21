@@ -601,6 +601,28 @@ def customer_store():
 
                     else:
                         st.error("Out of stock")
+                                            if inventory > 0:
+                        st.write(f"📦 {inventory} available")
+
+                        if st.button(
+                            "🛒 Add to Cart",
+                            key=f"add_{product_id}"
+                        ):
+                            if "cart" not in st.session_state:
+                                st.session_state.cart = {}
+
+                            current_quantity = st.session_state.cart.get(product_id, 0)
+
+                            if current_quantity < inventory:
+                                st.session_state.cart[product_id] = current_quantity + 1
+                                st.success(f"{name} added to your cart!")
+                            else:
+                                st.warning("You've reached the available stock limit.")
+
+                            st.rerun()
+
+                    else:
+                        st.error("Out of stock")
 
         st.session_state.cart = {}
 
