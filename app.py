@@ -774,7 +774,6 @@ if st.session_state.role == "customer":
     st.sidebar.metric("Cart items", sum(st.session_state.cart.values()))
     if st.sidebar.button("Go to Cart"):
         st.session_state.page = "Cart"
-        st.session_state.nav_radio = "Cart"
         st.rerun()
 
 if st.sidebar.button("Log Out"):
