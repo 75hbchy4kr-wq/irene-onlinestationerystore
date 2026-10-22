@@ -30,7 +30,8 @@ def create_tables():
                 description TEXT,
                 price REAL NOT NULL CHECK (price >= 0),
                 inventory INTEGER NOT NULL DEFAULT 0 CHECK (inventory >= 0),
-                image_url TEXT
+                image_url TEXT,
+                category TEXT NOT NULL DEFAULT 'Items'
             )
         """)
         connection.execute("""
@@ -55,6 +56,10 @@ def create_tables():
                 FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
             )
         """)
+
+        product_columns = {row["name"] for row in connection.execute("PRAGMA table_info(products)")}
+        if "category" not in product_columns:
+            connection.execute("ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT 'Items'")
 
         order_columns = {row["name"] for row in connection.execute("PRAGMA table_info(orders)")}
         migrations = {
