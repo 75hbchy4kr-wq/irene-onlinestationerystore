@@ -1,46 +1,43 @@
-# irene-onlinestationerystore
-# Irene's Online Stationery Store — Complete Version
+# Irene's Online Stationery Store — Stripe Checkout (test mode first)
 
 ## Files
-- `app.py`: Streamlit app (accounts, admin, storefront, cart, checkout demo, order history, optional email).
-- `database.py`: SQLite database setup and helpers.
-- `requirements.txt`: Python dependencies.
+- `app.py`: store app with Stripe-hosted Checkout and server-side payment verification on return.
+- `database.py`: SQLite tables plus safe migrations for payment fields.
+- `requirements.txt`: dependencies.
 
-## Run locally
-1. Put `app.py`, `database.py`, and `requirements.txt` in the same project folder.
-2. Keep your existing `store.db` in that folder if you want to preserve existing users/products/orders.
-3. Install dependencies: `pip install -r requirements.txt`
-4. Start the app: `streamlit run app.py`
+## Important
+- Start with Stripe **test mode**. Do not use live keys until an eligible adult account owner has completed the provider's setup and requirements.
+- The app currently uses USD because product prices are displayed in dollars.
+- The app reserves inventory when a pending order is created, then releases it when the customer returns through the cancel URL. Abandoned pending sessions may need manual cleanup; for a real public store, add a Stripe webhook to handle `checkout.session.completed` and `checkout.session.expired` reliably.
+- Streamlit Community Cloud's local SQLite file may not be durable across restarts. For real customers, use persistent managed storage before relying on this app for live orders.
 
-## First admin account
-If the database has no admin account, the app shows a first-time setup form to create one.
-Use a strong password of at least 8 characters. After the first admin exists, the setup form disappears.
+## 1. Update GitHub files
+Replace `app.py` and `database.py` with these versions, and update `requirements.txt` to include `stripe>=12.0.0`.
 
-## Existing database
-Make a backup of `store.db` before replacing files. The database setup adds `product_name` to older `order_items` tables when needed and preserves existing rows.
-If your existing `users` or `products` tables have a different schema, restore the backup and ask for help adapting the migration before running this version.
-
-## Demo checkout
-The checkout is not connected to a payment processor. It does not collect card numbers or take real payments. Orders are saved and stock is deducted only when checkout succeeds.
-
-## Optional email confirmations
-Set these in Streamlit secrets (recommended) or environment variables:
-- `SMTP_HOST`
-- `SMTP_PORT` (usually `587`)
-- `SMTP_USER`
-- `SMTP_PASSWORD`
-- `SMTP_FROM`
-
-The customer can enter an email address at checkout. Email is optional; an order is still saved if email is not configured or fails.
-
-For Streamlit Cloud, add settings under the app's **Settings → Secrets**, for example:
+## 2. Configure Streamlit Cloud Secrets
+Open your app's **Manage app → Settings → Secrets** and add the following, replacing the placeholders:
 
 ```toml
-SMTP_HOST = "smtp.example.com"
-SMTP_PORT = 587
-SMTP_USER = "your-smtp-user"
-SMTP_PASSWORD = "your-smtp-password"
-SMTP_FROM = "orders@example.com"
+STRIPE_SECRET_KEY = "sk_test_REPLACE_WITH_YOUR_TEST_SECRET_KEY"
+APP_URL = "https://YOUR-APP-NAME.streamlit.app"
+
+# Optional SMTP settings for order-confirmation emails
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = "587"
+SMTP_USER = "your-store-sender@gmail.com"
+SMTP_PASSWORD = "your-google-app-password"
+SMTP_FROM = "your-store-sender@gmail.com"
 ```
 
-Do not put real passwords in code or commit secrets to a public repository.
+Do not commit secrets or keys to GitHub, and never share them in chat. `APP_URL` must be the public HTTPS URL of your deployed Streamlit app, without a trailing slash. You can initially omit the SMTP settings; payment verification still works, but the app won't send the email.
+
+## 3. Test the flow
+1. Get a test secret key from the Stripe dashboard's test-mode Developers/API keys page.
+2. Add it as `STRIPE_SECRET_KEY` in Streamlit Secrets.
+3. Confirm product prices and inventory are correct.
+4. Log in as a customer, add an item to the cart, enter an email, and click **Continue to Secure Payment**.
+5. Use Stripe's official test card details in test mode only. No real charge should be made in test mode.
+6. After returning to the app, it retrieves the Checkout Session from Stripe and checks `payment_status`, order ID, customer ID, session ID, amount, and currency before marking the order paid.
+
+## Before any live launch
+Ask a parent/guardian to manage the payment-provider account as required for a minor. Add a signed Stripe webhook for reliable fulfillment, replace SQLite with persistent storage, and test cancellations, failed payments, duplicate returns, and stock reservation expiry. The success-page verification is a useful project/demo implementation, but a webhook is recommended for reliable production order fulfillment.
