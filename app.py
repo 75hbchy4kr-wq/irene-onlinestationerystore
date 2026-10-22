@@ -566,7 +566,7 @@ def checkout_page():
     )
     payment_choice = st.radio(
         "Payment method",
-        ["Pay online by card (Stripe)", "Pay in person at pickup (當面取貨付款)"],
+        ["Pay online by card (Stripe)", "Pay in person at pickup"],
         key="payment_choice",
     )
 
