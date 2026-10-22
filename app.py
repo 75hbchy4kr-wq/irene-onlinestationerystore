@@ -1,5 +1,6 @@
 import os
 import smtplib
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 import bcrypt
@@ -206,7 +207,7 @@ def stripe_secret_key():
     return get_setting("STRIPE_SECRET_KEY", "").strip()
 
 
-def create_pending_order(email_address, status="Pending payment"):
+def create_pending_order(email_address, status="Pending payment", pickup_date=None):
     """Reserve stock and create an order (pending Stripe payment, or pay at pickup)."""
     cart = st.session_state.cart
     if not cart:
@@ -239,8 +240,8 @@ def create_pending_order(email_address, status="Pending payment"):
                 line_items.append((product, quantity, price))
 
             cursor.execute(
-                "INSERT INTO orders (user_id, total, status, customer_email) VALUES (?, ?, ?, ?)",
-                (st.session_state.user_id, round(total, 2), status, email_address.strip()),
+                "INSERT INTO orders (user_id, total, status, customer_email, pickup_date) VALUES (?, ?, ?, ?, ?)",
+                (st.session_state.user_id, round(total, 2), status, email_address.strip(), pickup_date),
             )
             order_id = cursor.lastrowid
             for product, quantity, price in line_items:
@@ -259,9 +260,17 @@ def create_pending_order(email_address, status="Pending payment"):
         return False, f"Could not start checkout: {exc}", None, 0.0
 
 
-def place_pickup_order(email_address):
-    """Create an order that will be paid in person when the customer picks it up."""
-    ok, message, order_id, total = create_pending_order(email_address, status="Pay at pickup")
+def taipei_today():
+    """Today's date in Taiwan (UTC+8), independent of the server's time zone."""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+
+
+def place_pickup_order(email_address, pickup_date):
+    """Create an order that will be paid in person on the chosen pickup date."""
+    date_text = pickup_date.isoformat()
+    ok, message, order_id, total = create_pending_order(
+        email_address, status="Pay at pickup", pickup_date=date_text
+    )
     if not ok:
         return False, message
     st.session_state.cart = {}
@@ -271,6 +280,7 @@ def place_pickup_order(email_address):
         "total": float(total),
         "message": "Your items are reserved for you.",
         "pickup": True,
+        "pickup_date": date_text,
     }
     st.session_state.page = "Order Confirmation"
     return True, "Order placed."
@@ -584,9 +594,19 @@ def checkout_page():
             st.link_button("Open Stripe Checkout", checkout_url, type="primary", use_container_width=True)
             st.caption("Your stock is temporarily reserved while this payment is pending. If you cancel, it will be released.")
     else:
-        st.info("Your items will be reserved. Please pay in person when you pick up your order. 取貨時當面付款。")
+        st.info("Your items will be reserved. Please pay in person when you pick up your order.")
+        earliest = taipei_today() + timedelta(days=1)
+        latest = earliest + timedelta(days=13)
+        pickup_date = st.date_input(
+            "Pickup date",
+            value=earliest,
+            min_value=earliest,
+            max_value=latest,
+            key="pickup_date_input",
+        )
+        st.caption("Choose a pickup date within the next 14 days.")
         if st.button("Place Order (Pay at Pickup)", type="primary"):
-            ok, message = place_pickup_order(email_address)
+            ok, message = place_pickup_order(email_address, pickup_date)
             if ok:
                 st.rerun()
             else:
@@ -603,10 +623,11 @@ def order_confirmation_page():
     if not order:
         st.info("No recent order confirmation is available in this session.")
     elif order.get("pickup"):
-        st.success(f"Order #{order['id']} has been placed! 訂單已成立。")
+        st.success(f"Order #{order['id']} has been placed!")
+        st.write(f"**Pickup date:** {order['pickup_date']}")
         st.write(f"**Amount to pay at pickup:** NT${order['total']:,.0f}")
         st.caption(order["message"])
-        st.write("Please pay in person when you pick up your order. 請於取貨時當面付款。")
+        st.write("Please pay in person when you pick up your order.")
     else:
         st.success(f"Payment confirmed for order #{order['id']}!")
         st.write(f"**Order total:** NT${order['total']:,.0f}")
@@ -624,7 +645,7 @@ def order_history_page():
     st.title("📜 My Order History")
     with get_connection() as connection:
         orders = connection.execute("""
-            SELECT id, total, status, created_at
+            SELECT id, total, status, created_at, pickup_date
             FROM orders
             WHERE user_id = ?
             ORDER BY created_at DESC, id DESC
@@ -648,6 +669,8 @@ def order_history_page():
             f"Order #{order['id']} · NT${float(order['total']):,.0f} · {order['created_at']}"
         ):
             st.write(f"**Status:** {order['status']}")
+            if order["pickup_date"]:
+                st.write(f"**Pickup date:** {order['pickup_date']}")
             for item in order_items[order["id"]]:
                 st.write(
                     f"- {item['product_name']} × {item['quantity']} "
@@ -820,7 +843,7 @@ def admin_orders():
     with get_connection() as connection:
         orders = connection.execute("""
             SELECT orders.id, users.username, orders.total, orders.status,
-                   orders.created_at, orders.customer_email
+                   orders.created_at, orders.customer_email, orders.pickup_date
             FROM orders
             JOIN users ON users.id = orders.user_id
             ORDER BY orders.created_at DESC, orders.id DESC
@@ -834,6 +857,8 @@ def admin_orders():
         ):
             st.write(f"**Date:** {order['created_at']}")
             st.write(f"**Status:** {order['status']}")
+            if order["pickup_date"]:
+                st.write(f"**Pickup date:** {order['pickup_date']}")
             if order["customer_email"]:
                 st.write(f"**Customer email:** {order['customer_email']}")
             with get_connection() as connection:
