@@ -139,7 +139,7 @@ def send_order_email(to_address, username, order_id, total):
         f"Hi {username},\n\n"
         "Thank you for shopping at Irene's Online Stationery Store!\n"
         f"Your payment for order #{order_id} was confirmed.\n"
-        f"Order total: ${total:.2f} USD\n\n"
+        f"Order total: NT${total:,.0f}\n\n"
         "This email confirms that Stripe reported the payment as successful.\n"
     )
     try:
@@ -315,7 +315,7 @@ def start_stripe_checkout(email_address):
         line_items = [
             {
                 "price_data": {
-                    "currency": "usd",
+                    "currency": "twd",
                     "product_data": {"name": item["product_name"]},
                     "unit_amount": int(round(float(item["price"]) * 100)),
                 },
@@ -386,7 +386,7 @@ def handle_stripe_return():
             if (not order or str(order["user_id"]) != user_id
                     or order["stripe_session_id"] != session_id
                     or int(checkout.get("amount_total") or 0) != int(round(float(order["total"]) * 100))
-                    or checkout.get("currency") != "usd"):
+                    or checkout.get("currency") != "twd"):
                 raise ValueError("The payment details do not match this order.")
             if order["status"] == "Pending payment":
                 connection.execute(
@@ -443,7 +443,7 @@ def customer_store():
             with col2:
                 st.subheader(product["name"])
                 st.write(product["description"] or "No description yet.")
-                st.write(f"💰 **${float(product['price']):.2f}**")
+                st.write(f"💰 **NT${float(product['price']):,.0f}**")
                 stock = int(product["inventory"])
                 if stock <= 0:
                     st.error("Out of stock")
@@ -482,7 +482,7 @@ def cart_page():
             col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
             with col1:
                 st.write(f"**{row['name']}**")
-                st.write(f"${row['price']:.2f} each")
+                st.write(f"NT${row['price']:,.0f} each")
             with col2:
                 new_quantity = st.number_input(
                     "Quantity",
@@ -497,7 +497,7 @@ def cart_page():
                     st.rerun()
             with col3:
                 line_total = row["price"] * row["quantity"]
-                st.write(f"**${line_total:.2f}**")
+                st.write(f"**NT${line_total:,.0f}**")
             with col4:
                 if st.button("Remove", key=f"remove_{row['id']}"):
                     st.session_state.cart.pop(row["id"], None)
@@ -510,7 +510,7 @@ def cart_page():
         total += row["price"] * row["quantity"]
 
     st.divider()
-    st.subheader(f"Subtotal: ${total:.2f}")
+    st.subheader(f"Subtotal: NT${total:,.0f}")
     st.caption("Shipping and taxes are not calculated in this demo store.")
     col1, col2 = st.columns(2)
     with col1:
@@ -539,8 +539,8 @@ def checkout_page():
     total = sum(row["line_total"] for row in rows)
     st.subheader("Order summary")
     for row in rows:
-        st.write(f"- {row['name']} × {row['quantity']} — ${row['line_total']:.2f}")
-    st.markdown(f"### Total: ${total:.2f} USD")
+        st.write(f"- {row['name']} × {row['quantity']} — NT${row['line_total']:,.0f}")
+    st.markdown(f"### Total: NT${total:,.0f}")
     st.caption("Card details are entered on Stripe's secure hosted checkout page, not in this app.")
     email_address = st.text_input(
         "Email for your order confirmation",
@@ -572,7 +572,7 @@ def order_confirmation_page():
         st.info("No recent order confirmation is available in this session.")
     else:
         st.success(f"Payment confirmed for order #{order['id']}!")
-        st.write(f"**Order total:** ${order['total']:.2f} USD")
+        st.write(f"**Order total:** NT${order['total']:,.0f}")
         st.caption(order["message"])
         st.write("Your order is now recorded as paid.")
     if st.button("Continue Shopping", type="primary"):
@@ -608,15 +608,15 @@ def order_history_page():
 
     for order in orders:
         with st.expander(
-            f"Order #{order['id']} · ${float(order['total']):.2f} · {order['created_at']}"
+            f"Order #{order['id']} · NT${float(order['total']):,.0f} · {order['created_at']}"
         ):
             st.write(f"**Status:** {order['status']}")
             for item in order_items[order["id"]]:
                 st.write(
                     f"- {item['product_name']} × {item['quantity']} "
-                    f"at ${float(item['price']):.2f} each"
+                    f"at NT${float(item['price']):,.0f} each"
                 )
-            st.write(f"**Total: ${float(order['total']):.2f}**")
+            st.write(f"**Total: NT${float(order['total']):,.0f}**")
 
 
 # -----------------------------
@@ -627,7 +627,7 @@ def admin_add_product():
     with st.form("add_product_form", clear_on_submit=True):
         name = st.text_input("Product name")
         description = st.text_area("Description")
-        price = st.number_input("Price ($)", min_value=0.0, value=1.0, step=0.5)
+        price = st.number_input("Price (NT$)", min_value=0.0, value=100.0, step=10.0)
         inventory = st.number_input("Starting inventory", min_value=0, value=0, step=1)
         image_url = st.text_input("Image URL (optional)")
         submitted = st.form_submit_button("Add Product")
@@ -661,7 +661,7 @@ def admin_edit_products():
         name = st.text_input("Product name", value=product["name"])
         description = st.text_area("Description", value=product["description"] or "")
         price = st.number_input(
-            "Price ($)", min_value=0.0, value=float(product["price"]), step=0.5
+            "Price (NT$)", min_value=0.0, value=float(product["price"]), step=10.0
         )
         inventory = st.number_input(
             "Inventory", min_value=0, value=int(product["inventory"]), step=1
@@ -694,7 +694,7 @@ def admin_manage_inventory():
         with col1:
             st.write(f"**{product['name']}** (ID {product['id']})")
         with col2:
-            st.write(f"${float(product['price']):.2f}")
+            st.write(f"NT${float(product['price']):,.0f}")
         with col3:
             stock = int(product["inventory"])
             if stock == 0:
@@ -761,7 +761,7 @@ def admin_orders():
         return
     for order in orders:
         with st.expander(
-            f"Order #{order['id']} · {order['username']} · ${float(order['total']):.2f}"
+            f"Order #{order['id']} · {order['username']} · NT${float(order['total']):,.0f}"
         ):
             st.write(f"**Date:** {order['created_at']}")
             st.write(f"**Status:** {order['status']}")
@@ -773,7 +773,7 @@ def admin_orders():
             for item in items:
                 st.write(
                     f"- {item['product_name']} × {item['quantity']} "
-                    f"— ${float(item['price']) * int(item['quantity']):.2f}"
+                    f"— NT${float(item['price']) * int(item['quantity']):,.0f}"
                 )
 
 
