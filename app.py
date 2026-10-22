@@ -206,8 +206,8 @@ def stripe_secret_key():
     return get_setting("STRIPE_SECRET_KEY", "").strip()
 
 
-def create_pending_order(email_address):
-    """Reserve stock and create a pending order before opening Stripe Checkout."""
+def create_pending_order(email_address, status="Pending payment"):
+    """Reserve stock and create an order (pending Stripe payment, or pay at pickup)."""
     cart = st.session_state.cart
     if not cart:
         return False, "Your cart is empty.", None, 0.0
@@ -240,7 +240,7 @@ def create_pending_order(email_address):
 
             cursor.execute(
                 "INSERT INTO orders (user_id, total, status, customer_email) VALUES (?, ?, ?, ?)",
-                (st.session_state.user_id, round(total, 2), "Pending payment", email_address.strip()),
+                (st.session_state.user_id, round(total, 2), status, email_address.strip()),
             )
             order_id = cursor.lastrowid
             for product, quantity, price in line_items:
@@ -257,6 +257,23 @@ def create_pending_order(email_address):
         return True, "Pending order created.", order_id, round(total, 2)
     except Exception as exc:
         return False, f"Could not start checkout: {exc}", None, 0.0
+
+
+def place_pickup_order(email_address):
+    """Create an order that will be paid in person when the customer picks it up."""
+    ok, message, order_id, total = create_pending_order(email_address, status="Pay at pickup")
+    if not ok:
+        return False, message
+    st.session_state.cart = {}
+    st.session_state.stripe_checkout_url = None
+    st.session_state.last_order = {
+        "id": int(order_id),
+        "total": float(total),
+        "message": "Your items are reserved for you.",
+        "pickup": True,
+    }
+    st.session_state.page = "Order Confirmation"
+    return True, "Order placed."
 
 
 def release_pending_order(order_id, expire_stripe_session=True):
@@ -547,18 +564,33 @@ def checkout_page():
         placeholder="you@example.com",
         key="checkout_email",
     )
-    if st.button("Continue to Secure Payment", type="primary"):
-        ok, message, checkout_url = start_stripe_checkout(email_address)
-        if ok:
-            st.session_state.stripe_checkout_url = checkout_url
-            st.rerun()
-        else:
-            st.error(message)
+    payment_choice = st.radio(
+        "Payment method",
+        ["Pay online by card (Stripe)", "Pay in person at pickup (當面取貨付款)"],
+        key="payment_choice",
+    )
 
-    checkout_url = st.session_state.get("stripe_checkout_url")
-    if checkout_url:
-        st.link_button("Open Stripe Checkout", checkout_url, type="primary", use_container_width=True)
-        st.caption("Your stock is temporarily reserved while this payment is pending. If you cancel, it will be released.")
+    if payment_choice.startswith("Pay online"):
+        if st.button("Continue to Secure Payment", type="primary"):
+            ok, message, checkout_url = start_stripe_checkout(email_address)
+            if ok:
+                st.session_state.stripe_checkout_url = checkout_url
+                st.rerun()
+            else:
+                st.error(message)
+
+        checkout_url = st.session_state.get("stripe_checkout_url")
+        if checkout_url:
+            st.link_button("Open Stripe Checkout", checkout_url, type="primary", use_container_width=True)
+            st.caption("Your stock is temporarily reserved while this payment is pending. If you cancel, it will be released.")
+    else:
+        st.info("Your items will be reserved. Please pay in person when you pick up your order. 取貨時當面付款。")
+        if st.button("Place Order (Pay at Pickup)", type="primary"):
+            ok, message = place_pickup_order(email_address)
+            if ok:
+                st.rerun()
+            else:
+                st.error(message)
 
     if st.button("← Back to Cart"):
         st.session_state.page = "Cart"
@@ -570,6 +602,11 @@ def order_confirmation_page():
     st.title("✅ Order Confirmation")
     if not order:
         st.info("No recent order confirmation is available in this session.")
+    elif order.get("pickup"):
+        st.success(f"Order #{order['id']} has been placed! 訂單已成立。")
+        st.write(f"**Amount to pay at pickup:** NT${order['total']:,.0f}")
+        st.caption(order["message"])
+        st.write("Please pay in person when you pick up your order. 請於取貨時當面付款。")
     else:
         st.success(f"Payment confirmed for order #{order['id']}!")
         st.write(f"**Order total:** NT${order['total']:,.0f}")
@@ -747,11 +784,43 @@ def admin_delete_products():
             )
 
 
+def admin_update_pickup_order(order_id, action):
+    """Mark a pay-at-pickup order as paid in person, or cancel it and restock."""
+    with get_connection() as connection:
+        order = connection.execute(
+            "SELECT status FROM orders WHERE id = ?", (int(order_id),)
+        ).fetchone()
+        if not order or order["status"] != "Pay at pickup":
+            return False
+        if action == "paid":
+            connection.execute(
+                "UPDATE orders SET status = 'Paid in person' WHERE id = ? AND status = 'Pay at pickup'",
+                (int(order_id),),
+            )
+        else:
+            items = connection.execute(
+                "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
+                (int(order_id),),
+            ).fetchall()
+            for item in items:
+                if item["product_id"] is not None:
+                    connection.execute(
+                        "UPDATE products SET inventory = inventory + ? WHERE id = ?",
+                        (int(item["quantity"]), item["product_id"]),
+                    )
+            connection.execute(
+                "UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status = 'Pay at pickup'",
+                (int(order_id),),
+            )
+    return True
+
+
 def admin_orders():
     st.subheader("🧾 All Orders")
     with get_connection() as connection:
         orders = connection.execute("""
-            SELECT orders.id, users.username, orders.total, orders.status, orders.created_at
+            SELECT orders.id, users.username, orders.total, orders.status,
+                   orders.created_at, orders.customer_email
             FROM orders
             JOIN users ON users.id = orders.user_id
             ORDER BY orders.created_at DESC, orders.id DESC
@@ -761,10 +830,12 @@ def admin_orders():
         return
     for order in orders:
         with st.expander(
-            f"Order #{order['id']} · {order['username']} · NT${float(order['total']):,.0f}"
+            f"Order #{order['id']} · {order['username']} · NT${float(order['total']):,.0f} · {order['status']}"
         ):
             st.write(f"**Date:** {order['created_at']}")
             st.write(f"**Status:** {order['status']}")
+            if order["customer_email"]:
+                st.write(f"**Customer email:** {order['customer_email']}")
             with get_connection() as connection:
                 items = connection.execute("""
                     SELECT product_name, quantity, price
@@ -775,6 +846,16 @@ def admin_orders():
                     f"- {item['product_name']} × {item['quantity']} "
                     f"— NT${float(item['price']) * int(item['quantity']):,.0f}"
                 )
+            if order["status"] == "Pay at pickup":
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Paid & picked up", key=f"paid_{order['id']}"):
+                        admin_update_pickup_order(order["id"], "paid")
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancel & restock", key=f"cancel_{order['id']}"):
+                        admin_update_pickup_order(order["id"], "cancel")
+                        st.rerun()
 
 
 # -----------------------------
