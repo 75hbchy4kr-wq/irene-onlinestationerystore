@@ -17,6 +17,10 @@ st.set_page_config(
 
 create_tables()
 
+# Product categories shown in the store. Edit this list to add or rename categories.
+CATEGORIES = ["Items", "Food"]
+DEFAULT_CATEGORY = "Items"
+
 # -----------------------------
 # SESSION STATE
 # -----------------------------
@@ -159,7 +163,7 @@ def send_order_email(to_address, username, order_id, total):
 def fetch_products():
     with get_connection() as connection:
         return connection.execute("""
-            SELECT id, name, description, price, inventory, image_url
+            SELECT id, name, description, price, inventory, image_url, category
             FROM products
             ORDER BY name COLLATE NOCASE
         """).fetchall()
@@ -168,7 +172,7 @@ def fetch_products():
 def fetch_product(product_id):
     with get_connection() as connection:
         return connection.execute("""
-            SELECT id, name, description, price, inventory, image_url
+            SELECT id, name, description, price, inventory, image_url, category
             FROM products WHERE id = ?
         """, (int(product_id),)).fetchone()
 
@@ -449,6 +453,38 @@ def handle_stripe_return():
 # -----------------------------
 # CUSTOMER STORE
 # -----------------------------
+def product_card(product):
+    with st.container(border=True):
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            if product["image_url"]:
+                try:
+                    st.image(product["image_url"], use_container_width=True)
+                except Exception:
+                    st.caption("Product image could not be loaded.")
+        with col2:
+            st.subheader(product["name"])
+            st.write(product["description"] or "No description yet.")
+            st.write(f"💰 **NT${float(product['price']):,.0f}**")
+            stock = int(product["inventory"])
+            if stock <= 0:
+                st.error("Out of stock")
+            else:
+                st.write(f"📦 {stock} available")
+                if stock <= 5:
+                    st.caption("Only a few left!")
+                cart_qty = int(st.session_state.cart.get(product["id"], 0))
+                if cart_qty:
+                    st.caption(f"In your cart: {cart_qty}")
+                if st.button("🛒 Add to Cart", key=f"add_{product['id']}"):
+                    if cart_qty >= stock:
+                        st.warning("Your cart already contains the available stock limit.")
+                    else:
+                        st.session_state.cart[product["id"]] = cart_qty + 1
+                        st.toast(f"{product['name']} added to your cart!")
+                    st.rerun()
+
+
 def customer_store():
     st.title("🛍️ Irene's Online Stationery Store")
     st.write("Find something lovely for your desk, notes, and next big idea.")
@@ -458,36 +494,32 @@ def customer_store():
         st.info("There are currently no products in the store.")
         return
 
-    for product in products:
-        with st.container(border=True):
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                if product["image_url"]:
-                    try:
-                        st.image(product["image_url"], use_container_width=True)
-                    except Exception:
-                        st.caption("Product image could not be loaded.")
-            with col2:
-                st.subheader(product["name"])
-                st.write(product["description"] or "No description yet.")
-                st.write(f"💰 **NT${float(product['price']):,.0f}**")
-                stock = int(product["inventory"])
-                if stock <= 0:
-                    st.error("Out of stock")
-                else:
-                    st.write(f"📦 {stock} available")
-                    if stock <= 5:
-                        st.caption("Only a few left!")
-                    cart_qty = int(st.session_state.cart.get(product["id"], 0))
-                    if cart_qty:
-                        st.caption(f"In your cart: {cart_qty}")
-                    if st.button("🛒 Add to Cart", key=f"add_{product['id']}"):
-                        if cart_qty >= stock:
-                            st.warning("Your cart already contains the available stock limit.")
-                        else:
-                            st.session_state.cart[product["id"]] = cart_qty + 1
-                            st.toast(f"{product['name']} added to your cart!")
-                        st.rerun()
+    # Show the configured categories first, then any other category found in the data.
+    extra = sorted({p["category"] for p in products if p["category"] not in CATEGORIES})
+    all_categories = list(CATEGORIES) + extra
+
+    if st.session_state.get("store_category") not in ["All"] + all_categories:
+        st.session_state.store_category = "All"
+    choice = st.radio(
+        "Category",
+        ["All"] + all_categories,
+        horizontal=True,
+        key="store_category",
+    )
+
+    shown = all_categories if choice == "All" else [choice]
+    any_shown = False
+    for category in shown:
+        items = [p for p in products if p["category"] == category]
+        if not items:
+            continue
+        any_shown = True
+        if choice == "All":
+            st.header(category)
+        for product in items:
+            product_card(product)
+    if not any_shown:
+        st.info(f"There are no products in {choice} yet.")
 
 
 # -----------------------------
@@ -624,7 +656,8 @@ def order_confirmation_page():
         st.info("No recent order confirmation is available in this session.")
     elif order.get("pickup"):
         st.success(f"Order #{order['id']} has been placed!")
-        st.write(f"**Pickup date:** {order['pickup_date']}")
+        if order.get("pickup_date"):
+            st.write(f"**Pickup date:** {order['pickup_date']}")
         st.write(f"**Amount to pay at pickup:** NT${order['total']:,.0f}")
         st.caption(order["message"])
         st.write("Please pay in person when you pick up your order.")
@@ -689,6 +722,7 @@ def admin_add_product():
         description = st.text_area("Description")
         price = st.number_input("Price (NT$)", min_value=0.0, value=100.0, step=10.0)
         inventory = st.number_input("Starting inventory", min_value=0, value=0, step=1)
+        category = st.selectbox("Category", CATEGORIES)
         image_url = st.text_input("Image URL (optional)")
         submitted = st.form_submit_button("Add Product")
     if submitted:
@@ -697,10 +731,10 @@ def admin_add_product():
         else:
             with get_connection() as connection:
                 connection.execute("""
-                    INSERT INTO products (name, description, price, inventory, image_url)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO products (name, description, price, inventory, image_url, category)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """, (name.strip(), description.strip(), float(price), int(inventory),
-                      image_url.strip() or None))
+                      image_url.strip() or None, category))
             st.success(f"{name.strip()} added successfully.")
             st.rerun()
 
@@ -717,6 +751,9 @@ def admin_edit_products():
     if not product:
         st.error("That product could not be found.")
         return
+    category_options = list(CATEGORIES)
+    if product["category"] not in category_options:
+        category_options.append(product["category"])
     with st.form(f"edit_product_{product['id']}"):
         name = st.text_input("Product name", value=product["name"])
         description = st.text_area("Description", value=product["description"] or "")
@@ -725,6 +762,11 @@ def admin_edit_products():
         )
         inventory = st.number_input(
             "Inventory", min_value=0, value=int(product["inventory"]), step=1
+        )
+        category = st.selectbox(
+            "Category",
+            category_options,
+            index=category_options.index(product["category"]),
         )
         image_url = st.text_input("Image URL", value=product["image_url"] or "")
         submitted = st.form_submit_button("Save Changes")
@@ -735,10 +777,11 @@ def admin_edit_products():
             with get_connection() as connection:
                 connection.execute("""
                     UPDATE products
-                    SET name = ?, description = ?, price = ?, inventory = ?, image_url = ?
+                    SET name = ?, description = ?, price = ?, inventory = ?,
+                        image_url = ?, category = ?
                     WHERE id = ?
                 """, (name.strip(), description.strip(), float(price), int(inventory),
-                      image_url.strip() or None, product["id"]))
+                      image_url.strip() or None, category, product["id"]))
             st.success("Product updated.")
             st.rerun()
 
@@ -752,7 +795,7 @@ def admin_manage_inventory():
     for product in products:
         col1, col2, col3 = st.columns([3, 2, 2])
         with col1:
-            st.write(f"**{product['name']}** (ID {product['id']})")
+            st.write(f"**{product['name']}** (ID {product['id']}) · {product['category']}")
         with col2:
             st.write(f"NT${float(product['price']):,.0f}")
         with col3:
