@@ -12,7 +12,7 @@ from chatbot import MAX_QUESTION_LENGTH, answer_question, get_ai_config
 from database import create_tables, get_connection
 
 st.set_page_config(
-    page_title="Irene's Online Stationery Store",
+    page_title="Irene's Online Store",
     page_icon="🛍️",
     layout="wide",
 )
@@ -146,7 +146,7 @@ def send_order_email(to_address, username, order_id, total):
     message["To"] = to_address
     message.set_content(
         f"Hi {username},\n\n"
-        "Thank you for shopping at Irene's Online Stationery Store!\n"
+        "Thank you for shopping at Irene's Online Store!\n"
         f"Your payment for order #{order_id} was confirmed.\n"
         f"Order total: NT${total:,.0f}\n\n"
         "This email confirms that Stripe reported the payment as successful.\n"
@@ -196,11 +196,26 @@ def send_pickup_email(to_address, username, order_id, total, pickup_date):
         to_address,
         f"Order confirmation (pay at pickup) — order #{order_id}",
         f"Hi {username},\n\n"
-        "Thank you for shopping at Irene's Online Stationery Store!\n"
+        "Thank you for shopping at Irene's Online Store!\n"
         f"Your order #{order_id} has been placed and your items are reserved.\n"
         f"Pickup date: {pickup_date}\n"
         f"Amount to pay in person at pickup: NT${total:,.0f}\n\n"
         "Please bring this email or your order number when you pick up your order.\n",
+    )
+
+
+def send_cancel_email(to_address, username, order_id, pickup_date):
+    """Tell a customer that the store cancelled their pay-at-pickup order."""
+    date_line = f"Pickup date was: {pickup_date}\n" if pickup_date else ""
+    return send_email(
+        to_address,
+        f"Your order #{order_id} has been cancelled",
+        f"Hi {username},\n\n"
+        f"We're sorry, but your order #{order_id} at Irene's Online Store "
+        "has been cancelled by the store.\n"
+        f"{date_line}"
+        "You do not need to pay anything. If you have any questions, "
+        "please reply to this email.\n",
     )
 
 
@@ -560,8 +575,8 @@ def product_card(product):
 
 
 def customer_store():
-    st.title("🛍️ Irene's Online Stationery Store")
-    st.write("Find something lovely for your desk, notes, and next big idea.")
+    st.title("🛍️ Irene's Online Store")
+    st.write("Browse our items and food, and find something you will love.")
     st.button("💬 Ask our AI assistant", on_click=go_to_page, args=("Assistant",))
 
     products = fetch_products()
@@ -929,11 +944,13 @@ def admin_delete_products():
 
 
 def admin_update_pickup_order(order_id, action):
-    """Mark a pay-at-pickup order as paid in person, or cancel it and restock."""
+    """Mark a pay-at-pickup order as paid in person, or cancel it, restock and email the customer."""
     with get_connection() as connection:
-        order = connection.execute(
-            "SELECT status FROM orders WHERE id = ?", (int(order_id),)
-        ).fetchone()
+        order = connection.execute("""
+            SELECT orders.status, orders.customer_email, orders.pickup_date, users.username
+            FROM orders JOIN users ON users.id = orders.user_id
+            WHERE orders.id = ?
+        """, (int(order_id),)).fetchone()
         if not order or order["status"] != "Pay at pickup":
             return False
         if action == "paid":
@@ -941,26 +958,44 @@ def admin_update_pickup_order(order_id, action):
                 "UPDATE orders SET status = 'Paid in person' WHERE id = ? AND status = 'Pay at pickup'",
                 (int(order_id),),
             )
+            st.session_state.admin_notice = f"Order #{order_id} marked as paid in person."
+            return True
+        items = connection.execute(
+            "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
+            (int(order_id),),
+        ).fetchall()
+        for item in items:
+            if item["product_id"] is not None:
+                connection.execute(
+                    "UPDATE products SET inventory = inventory + ? WHERE id = ?",
+                    (int(item["quantity"]), item["product_id"]),
+                )
+        connection.execute(
+            "UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status = 'Pay at pickup'",
+            (int(order_id),),
+        )
+
+    notice = f"Order #{order_id} was cancelled and the stock was restored."
+    email = (order["customer_email"] or "").strip()
+    if not email:
+        notice += " There is no email address on file, so no cancellation email was sent."
+    else:
+        sent, reason = send_cancel_email(email, order["username"], int(order_id), order["pickup_date"])
+        if sent:
+            notice += f" A cancellation email was sent to {email}."
+        elif reason == "not_configured":
+            notice += " No email was sent because email is not set up for this store yet."
         else:
-            items = connection.execute(
-                "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
-                (int(order_id),),
-            ).fetchall()
-            for item in items:
-                if item["product_id"] is not None:
-                    connection.execute(
-                        "UPDATE products SET inventory = inventory + ? WHERE id = ?",
-                        (int(item["quantity"]), item["product_id"]),
-                    )
-            connection.execute(
-                "UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status = 'Pay at pickup'",
-                (int(order_id),),
-            )
+            notice += " The cancellation email could not be sent."
+    st.session_state.admin_notice = notice
     return True
 
 
 def admin_orders():
     st.subheader("🧾 All Orders")
+    notice = st.session_state.pop("admin_notice", None)
+    if notice:
+        st.info(notice)
     with get_connection() as connection:
         orders = connection.execute("""
             SELECT orders.id, users.username, orders.total, orders.status,
@@ -1008,7 +1043,7 @@ def admin_orders():
 # LOGIN / SIGNUP / FIRST ADMIN SETUP
 # -----------------------------
 def auth_screen():
-    st.title("🛍️ Irene's Online Stationery Store")
+    st.title("🛍️ Irene's Online Store")
     st.write("Welcome! Sign in to continue or create a customer account.")
 
     if count_admins() == 0:
