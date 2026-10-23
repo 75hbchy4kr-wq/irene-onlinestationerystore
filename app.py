@@ -413,9 +413,9 @@ def taipei_today():
 
 
 def school_pickup_slots(pickup_date):
-    """Return 30-minute pickup slots: weekdays 19:00–21:00, weekends 08:00–20:00."""
+    """Return 30-minute school-gate pickup slots: weekdays 09:00–16:00, weekends 08:00–20:00."""
     if pickup_date.weekday() < 5:
-        start_hour, end_hour = 19, 21
+        start_hour, end_hour = 9, 16
     else:
         start_hour, end_hour = 8, 20
     slots = []
@@ -869,13 +869,7 @@ def checkout_page():
             st.link_button("Open Stripe Checkout", checkout_url, type="primary", use_container_width=True)
             st.caption("Your stock is temporarily reserved while this payment is pending. If you cancel, it will be released.")
     else:
-        st.info("Pay in person at pickup. Choose the school gate, or request another location by email.")
-        pickup_type_label = st.radio(
-            "Choose your pickup location option",
-            ["School gate — LT Brown International School", "Request a custom location (Gmail confirmation required)"],
-            key="pickup_type_choice",
-        )
-        pickup_type = "school" if pickup_type_label.startswith("School gate") else "custom"
+        st.info("Pay in person at pickup. School-gate pickup is available on weekdays only; weekends are custom-location requests only.")
         customer_name = st.text_input("Your full name", key="pickup_customer_name")
         customer_phone = st.text_input("Contact phone number", key="pickup_customer_phone")
         earliest = taipei_today() + timedelta(days=1)
@@ -883,6 +877,20 @@ def checkout_page():
         pickup_date = st.date_input(
             "Requested pickup date", value=earliest, min_value=earliest, max_value=latest, key="pickup_date_input"
         )
+        if pickup_date.weekday() < 5:
+            pickup_options = [
+                "School gate — LT Brown International School",
+                "Request a custom location (Gmail confirmation required)",
+            ]
+        else:
+            pickup_options = ["Request a custom location (Gmail confirmation required)"]
+        current_pickup_choice = st.session_state.get("pickup_type_choice")
+        if current_pickup_choice not in pickup_options:
+            st.session_state["pickup_type_choice"] = pickup_options[0]
+        pickup_type_label = st.radio(
+            "Choose your pickup location option", pickup_options, key="pickup_type_choice",
+        )
+        pickup_type = "school" if pickup_type_label.startswith("School gate") else "custom"
 
         if pickup_type == "school":
             pickup_slots = school_pickup_slots(pickup_date)
@@ -893,10 +901,9 @@ def checkout_page():
             pickup_location = "LT Brown International School gate"
             st.text_input("Pickup location", value=pickup_location, disabled=True)
             if pickup_date.weekday() < 5:
-                st.caption("Weekdays (Mon–Fri): 19:00–21:00, in 30-minute slots.")
-            else:
-                st.caption("Weekends (Sat–Sun): 08:00–20:00, in 30-minute slots.")
-            st.caption("There is no per-slot customer limit. Please only arrange pickup at a time and place permitted by the school.")
+                st.caption("School gate on weekdays (Mon–Fri): 09:00–16:00, in 30-minute slots.")
+            st.caption("School gate on weekdays (Mon–Fri): 09:00–16:00, in 30-minute slots.")
+            st.caption("School-gate pickup is not available on Saturdays or Sundays.")
         else:
             pickup_location = st.text_input(
                 "Requested meeting location", key="custom_pickup_location",
@@ -906,7 +913,11 @@ def checkout_page():
                 "Requested time", key="custom_pickup_time",
                 placeholder="e.g. 18:30 or 6:30 PM"
             )
-            st.caption("After you place the order, an automatic Gmail will confirm that your request was received. The location and time are not final until the store owner replies by email.")
+            if pickup_date.weekday() < 5:
+                st.caption("Custom location on weekdays (Mon–Fri): request a meeting time between 19:00 and 21:00. The location and time must be confirmed by the store owner by email.")
+            else:
+                st.caption("Weekends (Sat–Sun): custom location only. Enter your preferred meeting time; the location and time must be confirmed by the store owner by email.")
+            st.caption("After you place the order, an automatic Gmail will confirm that your request was received. This is not the final meeting confirmation.")
 
         if st.button("Place Order (Pay at Pickup)", type="primary"):
             if not email_address.strip() or "@" not in email_address:
@@ -1156,22 +1167,52 @@ def admin_delete_products():
 
 
 def admin_update_pickup_order(order_id, action):
-    """Mark a pay-at-pickup order as paid in person, or cancel it, restock and email the customer."""
+    """Mark an unpaid pickup order as paid, or cancel an eligible unpaid pickup order and restock once."""
+    allowed_cancel_statuses = ("Pay at pickup", "Awaiting location confirmation")
     with get_connection() as connection:
         order = connection.execute("""
             SELECT orders.status, orders.customer_email, orders.pickup_date, users.username
             FROM orders JOIN users ON users.id = orders.user_id
             WHERE orders.id = ?
         """, (int(order_id),)).fetchone()
-        if not order or order["status"] != "Pay at pickup":
+        if not order:
+            st.session_state.admin_notice = f"Order #{order_id} was not found."
             return False
+
         if action == "paid":
-            connection.execute(
+            if order["status"] != "Pay at pickup":
+                st.session_state.admin_notice = "Only an order marked 'Pay at pickup' can be marked as paid in person."
+                return False
+            result = connection.execute(
                 "UPDATE orders SET status = 'Paid in person' WHERE id = ? AND status = 'Pay at pickup'",
                 (int(order_id),),
             )
+            if result.rowcount != 1:
+                st.session_state.admin_notice = f"Order #{order_id} changed before it could be updated. Please refresh and try again."
+                return False
             st.session_state.admin_notice = f"Order #{order_id} marked as paid in person."
             return True
+
+        if action != "cancel":
+            st.session_state.admin_notice = "Unknown order action."
+            return False
+        if order["status"] not in allowed_cancel_statuses:
+            st.session_state.admin_notice = (
+                f"Order #{order_id} was not cancelled. Only unpaid pickup orders can be cancelled here. "
+                "Orders already paid online require a Stripe refund before cancellation."
+            )
+            return False
+
+        # Change the status first and only restore stock if this one-time transition succeeds.
+        # This prevents repeated clicks/reruns from adding the same stock back more than once.
+        result = connection.execute(
+            "UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status IN (?, ?)",
+            (int(order_id), *allowed_cancel_statuses),
+        )
+        if result.rowcount != 1:
+            st.session_state.admin_notice = f"Order #{order_id} has already been updated; stock was not changed again."
+            return False
+
         items = connection.execute(
             "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
             (int(order_id),),
@@ -1182,10 +1223,6 @@ def admin_update_pickup_order(order_id, action):
                     "UPDATE products SET inventory = inventory + ? WHERE id = ?",
                     (int(item["quantity"]), item["product_id"]),
                 )
-        connection.execute(
-            "UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status = 'Pay at pickup'",
-            (int(order_id),),
-        )
 
     notice = f"Order #{order_id} was cancelled and the stock was restored."
     email = (order["customer_email"] or "").strip()
@@ -1266,6 +1303,13 @@ def admin_orders():
                     if st.button("❌ Cancel & restock", key=f"cancel_{order['id']}"):
                         admin_update_pickup_order(order["id"], "cancel")
                         st.rerun()
+            elif order["status"] == "Awaiting location confirmation":
+                st.caption("This custom-location pickup has not been confirmed yet and can be cancelled.")
+                if st.button("❌ Cancel order & restore stock", key=f"cancel_custom_{order['id']}"):
+                    admin_update_pickup_order(order["id"], "cancel")
+                    st.rerun()
+            elif order["status"] == "Paid":
+                st.caption("This order has already been paid online. Process the Stripe refund before cancelling/restocking it.")
 
 
 def admin_email_test():
