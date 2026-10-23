@@ -1,4 +1,4 @@
-"""AI shopping assistant for Irene's Online Stationery Store.
+"""AI shopping assistant for Irene's Online Store.
 
 How it works (every question):
 1. Read the CURRENT products from the store database (names, prices, stock).
@@ -199,7 +199,7 @@ def build_system_prompt(selected, total_count):
         f"all {total_count} products" if len(selected) == total_count
         else f"the {len(selected)} most relevant of {total_count} products"
     )
-    return f"""You are the friendly shopping assistant for Irene's Online Stationery Store.
+    return f"""You are the friendly shopping assistant for Irene's Online Store.
 Answer customers' questions about products, prices, availability, quantities and recommendations.
 
 STRICT RULES
