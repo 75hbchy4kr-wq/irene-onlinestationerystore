@@ -13,7 +13,7 @@ def get_connection():
 
 
 def create_tables():
-    """Create store tables and safely add new columns to existing databases."""
+    """Create store tables and safely migrate existing orders without deleting data."""
     with get_connection() as connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -67,6 +67,16 @@ def create_tables():
             "stripe_session_id": "ALTER TABLE orders ADD COLUMN stripe_session_id TEXT",
             "email_sent": "ALTER TABLE orders ADD COLUMN email_sent INTEGER NOT NULL DEFAULT 0",
             "pickup_date": "ALTER TABLE orders ADD COLUMN pickup_date TEXT",
+            "pickup_time": "ALTER TABLE orders ADD COLUMN pickup_time TEXT",
+            "pickup_location": "ALTER TABLE orders ADD COLUMN pickup_location TEXT",
+            "fulfillment_method": "ALTER TABLE orders ADD COLUMN fulfillment_method TEXT NOT NULL DEFAULT 'pickup'",
+            "customer_name": "ALTER TABLE orders ADD COLUMN customer_name TEXT NOT NULL DEFAULT ''",
+            "customer_phone": "ALTER TABLE orders ADD COLUMN customer_phone TEXT NOT NULL DEFAULT ''",
+            "shipping_region": "ALTER TABLE orders ADD COLUMN shipping_region TEXT",
+            "shipping_city": "ALTER TABLE orders ADD COLUMN shipping_city TEXT",
+            "shipping_postal_code": "ALTER TABLE orders ADD COLUMN shipping_postal_code TEXT",
+            "shipping_address_line1": "ALTER TABLE orders ADD COLUMN shipping_address_line1 TEXT",
+            "shipping_address_line2": "ALTER TABLE orders ADD COLUMN shipping_address_line2 TEXT",
         }
         for column, sql in migrations.items():
             if column not in order_columns:
