@@ -1226,17 +1226,54 @@ def admin_delete_products():
 
 
 def admin_update_pickup_order(order_id, action):
-    """Mark an unpaid pickup order as paid, or cancel an eligible unpaid pickup order and restock once."""
+    """Confirm a custom pickup request, mark pickup orders paid, or cancel and restock once."""
     allowed_cancel_statuses = ("Pay at pickup", "Awaiting location confirmation")
     with get_connection() as connection:
         order = connection.execute("""
-            SELECT orders.status, orders.customer_email, orders.pickup_date, users.username
+            SELECT orders.status, orders.customer_email, orders.pickup_date, orders.pickup_time,
+                   orders.pickup_location, orders.total, users.username
             FROM orders JOIN users ON users.id = orders.user_id
             WHERE orders.id = ?
         """, (int(order_id),)).fetchone()
         if not order:
             st.session_state.admin_notice = f"Order #{order_id} was not found."
             return False
+
+        if action == "confirm_location":
+            if order["status"] != "Awaiting location confirmation":
+                st.session_state.admin_notice = "Only a custom-location order awaiting confirmation can be confirmed."
+                return False
+            result = connection.execute(
+                "UPDATE orders SET status = 'Pay at pickup' WHERE id = ? AND status = 'Awaiting location confirmation'",
+                (int(order_id),),
+            )
+            if result.rowcount != 1:
+                st.session_state.admin_notice = f"Order #{order_id} changed before it could be confirmed. Please refresh and try again."
+                return False
+            email = (order["customer_email"] or "").strip()
+            if email:
+                sent, reason = send_email(
+                    email,
+                    f"Pickup location confirmed — order #{order_id}",
+                    f"Hi {order['username']},\n\n"
+                    "Your custom pickup request has been confirmed. Please use the details below.\n\n"
+                    f"Order number: #{order_id}\n"
+                    f"Confirmed date: {order['pickup_date'] or '(not set)'}\n"
+                    f"Confirmed time: {order['pickup_time'] or '(not set)'}\n"
+                    f"Confirmed location: {order['pickup_location'] or '(not set)'}\n"
+                    f"Amount to pay at pickup: NT${float(order['total']):,.0f}\n\n"
+                    "Please contact the store if you need to change the arrangement.\n"
+                    "Irene's Online Store\n",
+                )
+                if sent:
+                    st.session_state.admin_notice = f"Order #{order_id} confirmed. A confirmation email was sent to {email}."
+                elif reason == "not_configured":
+                    st.session_state.admin_notice = f"Order #{order_id} confirmed, but no email was sent because email is not configured. Please contact the customer manually."
+                else:
+                    st.session_state.admin_notice = f"Order #{order_id} confirmed, but the email could not be sent. Please contact the customer manually."
+            else:
+                st.session_state.admin_notice = f"Order #{order_id} confirmed, but no customer email is saved. Please contact the customer manually."
+            return True
 
         if action == "paid":
             if order["status"] != "Pay at pickup":
@@ -1363,10 +1400,16 @@ def admin_orders():
                         admin_update_pickup_order(order["id"], "cancel")
                         st.rerun()
             elif order["status"] == "Awaiting location confirmation":
-                st.caption("This custom-location pickup has not been confirmed yet and can be cancelled.")
-                if st.button("❌ Cancel order & restore stock", key=f"cancel_custom_{order['id']}"):
-                    admin_update_pickup_order(order["id"], "cancel")
-                    st.rerun()
+                st.caption("This custom-location pickup has not been confirmed yet. Check the requested date, time, and address above before confirming.")
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button("✅ Confirm location & time", key=f"confirm_custom_{order['id']}", type="primary"):
+                        admin_update_pickup_order(order["id"], "confirm_location")
+                        st.rerun()
+                with cancel_col:
+                    if st.button("❌ Cancel order & restore stock", key=f"cancel_custom_{order['id']}"):
+                        admin_update_pickup_order(order["id"], "cancel")
+                        st.rerun()
             elif order["status"] == "Paid":
                 st.caption("This order has already been paid online. Process the Stripe refund before cancelling/restocking it.")
 
