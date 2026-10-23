@@ -129,65 +129,102 @@ def get_setting(name, default=""):
         return os.getenv(name, default)
 
 
-def send_order_email(to_address, username, order_id, total):
-    """Send a paid-order confirmation email using configured SMTP settings."""
-    host = get_setting("SMTP_HOST", "")
-    port = int(get_setting("SMTP_PORT", "587"))
-    smtp_user = get_setting("SMTP_USER", "")
-    smtp_password = get_setting("SMTP_PASSWORD", "")
-    from_address = get_setting("SMTP_FROM", smtp_user)
-
-    if not (host and smtp_user and smtp_password and from_address and to_address):
-        return False, "Payment succeeded, but email is not configured."
-
-    message = EmailMessage()
-    message["Subject"] = f"Payment confirmation — order #{order_id}"
-    message["From"] = from_address
-    message["To"] = to_address
-    message.set_content(
-        f"Hi {username},\n\n"
-        "Thank you for shopping at Irene's Online Store!\n"
-        f"Your payment for order #{order_id} was confirmed.\n"
-        f"Order total: NT${total:,.0f}\n\n"
-        "This email confirms that Stripe reported the payment as successful.\n"
-    )
+def smtp_settings():
+    """Read the SMTP settings. Spaces in the App password are removed automatically."""
+    host = str(get_setting("SMTP_HOST", "")).strip()
     try:
-        with smtplib.SMTP(host, port, timeout=15) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(message)
-        return True, "Payment confirmed and order confirmation email sent."
-    except Exception:
-        return False, "Payment succeeded, but the confirmation email could not be sent. Check SMTP settings."
+        port = int(str(get_setting("SMTP_PORT", "587")).strip())
+    except ValueError:
+        port = 587
+    user = str(get_setting("SMTP_USER", "")).strip()
+    password = str(get_setting("SMTP_PASSWORD", "")).replace(" ", "").replace("\u00a0", "").strip()
+    sender = str(get_setting("SMTP_FROM", user)).strip() or user
+    return host, port, user, password, sender
 
 
 def send_email(to_address, subject, body):
     """Send an email with the SMTP settings in Streamlit Secrets.
     Returns (True, "sent"), (False, "not_configured") or (False, "failed")."""
-    host = get_setting("SMTP_HOST", "")
-    try:
-        port = int(get_setting("SMTP_PORT", "587"))
-    except ValueError:
-        port = 587
-    smtp_user = get_setting("SMTP_USER", "")
-    smtp_password = get_setting("SMTP_PASSWORD", "")
-    from_address = get_setting("SMTP_FROM", smtp_user)
-    if not (host and smtp_user and smtp_password and from_address and to_address):
+    host, port, user, password, sender = smtp_settings()
+    if not (host and user and password and sender and to_address):
         return False, "not_configured"
 
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = from_address
+    message["From"] = sender
     message["To"] = to_address
     message.set_content(body)
     try:
         with smtplib.SMTP(host, port, timeout=15) as server:
             server.starttls()
-            server.login(smtp_user, smtp_password)
+            server.login(user, password)
             server.send_message(message)
         return True, "sent"
     except Exception:
         return False, "failed"
+
+
+def send_order_email(to_address, username, order_id, total):
+    """Send a paid-order confirmation email using configured SMTP settings."""
+    sent, reason = send_email(
+        to_address,
+        f"Payment confirmation — order #{order_id}",
+        f"Hi {username},\n\n"
+        "Thank you for shopping at Irene's Online Store!\n"
+        f"Your payment for order #{order_id} was confirmed.\n"
+        f"Order total: NT${total:,.0f}\n\n"
+        "This email confirms that Stripe reported the payment as successful.\n",
+    )
+    if sent:
+        return True, "Payment confirmed and order confirmation email sent."
+    if reason == "not_configured":
+        return False, "Payment succeeded, but email is not configured."
+    return False, "Payment succeeded, but the confirmation email could not be sent. Check SMTP settings."
+
+
+def check_email_settings(to_address):
+    """Admin helper: send a test email and explain exactly what is wrong if it fails."""
+    host, port, user, password, sender = smtp_settings()
+    missing = [n for n, v in (("SMTP_HOST", host), ("SMTP_USER", user), ("SMTP_PASSWORD", password)) if not v]
+    if missing:
+        return False, (
+            "These settings are missing or empty: " + ", ".join(missing) + ". Check the spelling "
+            "(capital letters and underscores), and make sure the lines are at the very top of "
+            "Secrets, above any line that starts with [ ."
+        )
+    if not to_address or "@" not in to_address:
+        return False, "Please type an email address to send the test to."
+    if not password.isascii():
+        return False, (
+            "SMTP_PASSWORD contains a character that is not a plain letter or number. "
+            "Delete it and type the 16 letters of the App password again."
+        )
+    message = EmailMessage()
+    message["Subject"] = "Test email from Irene's Online Store"
+    message["From"] = sender
+    message["To"] = to_address
+    message.set_content("This is a test email. Your store's email settings work!")
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls()
+            server.login(user, password)
+            server.send_message(message)
+    except smtplib.SMTPAuthenticationError:
+        return False, (
+            "Gmail rejected the login. Use the 16-letter App password (not your normal Gmail "
+            "password), make sure SMTP_USER is the same Gmail account that created it, and make "
+            "sure 2-Step Verification is turned on for that account."
+        )
+    except smtplib.SMTPRecipientsRefused:
+        return False, "The test address was rejected. Check that it is typed correctly."
+    except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, OSError):
+        return False, (
+            f"Could not connect to {host} on port {port}. SMTP_HOST should be smtp.gmail.com "
+            "and SMTP_PORT should be 587."
+        )
+    except Exception as exc:
+        return False, f"Unexpected email error: {type(exc).__name__}."
+    return True, f"Test email sent to {to_address} from {sender}. Check the inbox and the spam folder."
 
 
 def send_pickup_email(to_address, username, order_id, total, pickup_date):
@@ -1039,6 +1076,21 @@ def admin_orders():
                         st.rerun()
 
 
+def admin_email_test():
+    st.subheader("✉️ Email Test")
+    st.write("Send a test email to check that the email settings in Streamlit Secrets work.")
+    host, port, user, password, sender = smtp_settings()
+    for name, value in (("SMTP_HOST", host), ("SMTP_USER", user), ("SMTP_PASSWORD", password)):
+        st.write(f"{'✅' if value else '❌'} {name} {'is set' if value else 'is missing'}")
+    to_address = st.text_input("Send the test email to", placeholder="you@example.com")
+    if st.button("Send test email", type="primary"):
+        ok, message = check_email_settings(to_address.strip())
+        if ok:
+            st.success(message)
+        else:
+            st.error(message)
+
+
 # -----------------------------
 # LOGIN / SIGNUP / FIRST ADMIN SETUP
 # -----------------------------
@@ -1195,7 +1247,7 @@ st.sidebar.caption(f"Role: {st.session_state.role.title()}")
 if st.session_state.role == "admin":
     page_options = [
         "Store Preview", "Add Product", "Edit Products",
-        "Manage Inventory", "Delete Products", "All Orders", "Assistant"
+        "Manage Inventory", "Delete Products", "All Orders", "Assistant", "Email Test"
     ]
 else:
     page_options = ["Store", "Cart", "Order History", "Assistant"]
@@ -1233,6 +1285,8 @@ if st.session_state.role == "admin":
         admin_delete_products()
     elif current_page == "All Orders":
         admin_orders()
+    elif current_page == "Email Test":
+        admin_email_test()
     elif current_page == "Assistant":
         chatbot_page()
     else:
