@@ -1,4 +1,4 @@
-# Irene's Online Stationery Store — Stripe Checkout (test mode first)
+# Irene's Online Store — Stripe Checkout (test mode first)
 
 ## Files
 - `app.py`: store app with Stripe-hosted Checkout and server-side payment verification on return.
