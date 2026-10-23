@@ -227,20 +227,36 @@ def check_email_settings(to_address):
     return True, f"Test email sent to {to_address} from {sender}. Check the inbox and the spam folder."
 
 
-def send_pickup_email(to_address, username, order_id, total, pickup_date, pickup_time, pickup_location):
-    """Email a confirmation for an order that will be paid in person at pickup."""
-    return send_email(
-        to_address,
-        f"Order confirmation (pay at pickup) — order #{order_id}",
-        f"Hi {username},\n\n"
-        "Thank you for shopping at Irene's Online Store!\n"
-        f"Your order #{order_id} has been placed and your items are reserved.\n"
-        f"Pickup date: {pickup_date}\n"
-        f"Pickup time: {pickup_time}\n"
-        f"Pickup location: {pickup_location}\n"
-        f"Amount to pay in person at pickup: NT${total:,.0f}\n\n"
-        "Please bring this email or your order number when you pick up your order.\n",
-    )
+def send_pickup_email(to_address, username, order_id, total, pickup_date, pickup_time, pickup_location, pickup_type="school"):
+    """Email order details; custom-location requests are explicitly pending confirmation."""
+    if pickup_type == "custom":
+        subject = f"Order received — location confirmation pending — order #{order_id}"
+        body = (
+            f"Hi {username},\n\n"
+            "Thank you for shopping at Irene's Online Store!\n"
+            f"Your order #{order_id} has been received and your items are reserved.\n"
+            f"Requested date: {pickup_date}\n"
+            f"Requested time: {pickup_time}\n"
+            f"Requested location: {pickup_location}\n\n"
+            "IMPORTANT: The requested location and meeting time are not confirmed yet. "
+            "The store owner will reply to this email to confirm or discuss another arrangement. "
+            "Please wait for that confirmation before travelling to the meeting point.\n"
+            f"Amount to pay in person: NT${total:,.0f}\n"
+            f"Order number: #{order_id}\n"
+        )
+    else:
+        subject = f"Order confirmation (school gate pickup) — order #{order_id}"
+        body = (
+            f"Hi {username},\n\n"
+            "Thank you for shopping at Irene's Online Store!\n"
+            f"Your order #{order_id} has been placed and your items are reserved.\n"
+            f"Pickup date: {pickup_date}\n"
+            f"Pickup time: {pickup_time}\n"
+            f"Pickup location: {pickup_location}\n"
+            f"Amount to pay in person at pickup: NT${total:,.0f}\n\n"
+            "Please bring this email or your order number when you pick up your order.\n"
+        )
+    return send_email(to_address, subject, body)
 
 
 def send_cancel_email(to_address, username, order_id, pickup_date):
@@ -396,12 +412,26 @@ def taipei_today():
     return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
 
 
-def place_pickup_order(email_address, customer_name, customer_phone, pickup_date, pickup_time, pickup_location):
-    """Create an order that will be paid in person on the chosen date and time."""
+def school_pickup_slots(pickup_date):
+    """Return 30-minute pickup slots: weekdays 19:00–21:00, weekends 08:00–20:00."""
+    if pickup_date.weekday() < 5:
+        start_hour, end_hour = 19, 21
+    else:
+        start_hour, end_hour = 8, 20
+    slots = []
+    for minute in range(start_hour * 60, end_hour * 60, 30):
+        end_minute = minute + 30
+        slots.append(f"{minute // 60:02d}:{minute % 60:02d}–{end_minute // 60:02d}:{end_minute % 60:02d}")
+    return slots
+
+
+def place_pickup_order(email_address, customer_name, customer_phone, pickup_date, pickup_time, pickup_location, pickup_type="school"):
+    """Create a pay-at-pickup order for school-gate pickup or a custom-location request."""
     date_text = pickup_date.isoformat()
+    order_status = "Awaiting location confirmation" if pickup_type == "custom" else "Pay at pickup"
     ok, message, order_id, total = create_pending_order(
         email_address,
-        status="Pay at pickup",
+        status=order_status,
         pickup_date=date_text,
         pickup_time=pickup_time,
         pickup_location=pickup_location,
@@ -413,7 +443,7 @@ def place_pickup_order(email_address, customer_name, customer_phone, pickup_date
         return False, message
     sent, reason = send_pickup_email(
         email_address.strip(), st.session_state.username, int(order_id), float(total),
-        date_text, pickup_time, pickup_location,
+        date_text, pickup_time, pickup_location, pickup_type,
     )
     if sent:
         with get_connection() as connection:
@@ -433,6 +463,7 @@ def place_pickup_order(email_address, customer_name, customer_phone, pickup_date
         "pickup_date": date_text,
         "pickup_time": pickup_time,
         "pickup_location": pickup_location,
+        "pickup_type": pickup_type,
     }
     st.session_state.page = "Order Confirmation"
     return True, "Order placed."
@@ -789,7 +820,7 @@ def checkout_page():
     )
     payment_choice = st.radio(
         "How would you like to receive and pay for your order?",
-        ["Online payment + ship to my address", "Pay in person at pickup"],
+        ["Online payment + ship to my address", "Pay in person (school gate or custom location)"],
         key="payment_choice",
     )
 
@@ -838,36 +869,58 @@ def checkout_page():
             st.link_button("Open Stripe Checkout", checkout_url, type="primary", use_container_width=True)
             st.caption("Your stock is temporarily reserved while this payment is pending. If you cancel, it will be released.")
     else:
-        st.info("Your items will be reserved. Pay in person when you meet to collect your order.")
+        st.info("Pay in person at pickup. Choose the school gate, or request another location by email.")
+        pickup_type_label = st.radio(
+            "Choose your pickup location option",
+            ["School gate — LT Brown International School", "Request a custom location (Gmail confirmation required)"],
+            key="pickup_type_choice",
+        )
+        pickup_type = "school" if pickup_type_label.startswith("School gate") else "custom"
         customer_name = st.text_input("Your full name", key="pickup_customer_name")
         customer_phone = st.text_input("Contact phone number", key="pickup_customer_phone")
         earliest = taipei_today() + timedelta(days=1)
         latest = earliest + timedelta(days=13)
         pickup_date = st.date_input(
-            "Pickup date", value=earliest, min_value=earliest, max_value=latest, key="pickup_date_input"
+            "Requested pickup date", value=earliest, min_value=earliest, max_value=latest, key="pickup_date_input"
         )
-        configured_slots = str(get_setting(
-            "PICKUP_TIME_SLOTS",
-            "12:00–12:15,12:15–12:30,12:30–12:45,15:30–15:45,15:45–16:00,16:00–16:15,16:15–16:30"
-        ))
-        pickup_slots = [slot.strip() for slot in configured_slots.split(",") if slot.strip()]
-        pickup_time = st.selectbox("Pickup time", pickup_slots, key="pickup_time_input")
-        pickup_location = str(get_setting(
-            "PICKUP_LOCATION",
-            "School public area approved by the school; exact meeting point to be confirmed by email"
-        )).strip()
-        st.text_input("Pickup location", value=pickup_location, disabled=True, help="The store administrator sets this in Streamlit Secrets.")
-        st.caption("Only arrange a school pickup in a place and time permitted by your school. Confirm the meeting details by email if needed.")
+
+        if pickup_type == "school":
+            pickup_slots = school_pickup_slots(pickup_date)
+            pickup_time = st.selectbox(
+                "Pickup time (Taiwan time)", pickup_slots,
+                key=f"school_pickup_time_{pickup_date.isoformat()}"
+            )
+            pickup_location = "LT Brown International School gate"
+            st.text_input("Pickup location", value=pickup_location, disabled=True)
+            if pickup_date.weekday() < 5:
+                st.caption("Weekdays (Mon–Fri): 19:00–21:00, in 30-minute slots.")
+            else:
+                st.caption("Weekends (Sat–Sun): 08:00–20:00, in 30-minute slots.")
+            st.caption("There is no per-slot customer limit. Please only arrange pickup at a time and place permitted by the school.")
+        else:
+            pickup_location = st.text_input(
+                "Requested meeting location", key="custom_pickup_location",
+                placeholder="Enter the location you would like to meet"
+            )
+            pickup_time = st.text_input(
+                "Requested time", key="custom_pickup_time",
+                placeholder="e.g. 18:30 or 6:30 PM"
+            )
+            st.caption("After you place the order, an automatic Gmail will confirm that your request was received. The location and time are not final until the store owner replies by email.")
+
         if st.button("Place Order (Pay at Pickup)", type="primary"):
             if not email_address.strip() or "@" not in email_address:
                 st.error("Please enter a valid email address.")
             elif not customer_name.strip() or not customer_phone.strip():
                 st.error("Please enter your name and contact phone number.")
-            elif not pickup_location:
-                st.error("The store administrator must configure a pickup location first.")
+            elif not pickup_location.strip():
+                st.error("Please enter your requested meeting location.")
+            elif not pickup_time.strip():
+                st.error("Please choose or enter a pickup time.")
             else:
                 ok, message = place_pickup_order(
-                    email_address, customer_name, customer_phone, pickup_date, pickup_time, pickup_location
+                    email_address, customer_name, customer_phone, pickup_date, pickup_time.strip(),
+                    pickup_location.strip(), pickup_type
                 )
                 if ok:
                     st.rerun()
@@ -889,6 +942,8 @@ def order_confirmation_page():
         st.write(f"**Pickup date:** {order.get('pickup_date', 'To be confirmed')}")
         st.write(f"**Pickup time:** {order.get('pickup_time', 'To be confirmed')}")
         st.write(f"**Pickup location:** {order.get('pickup_location', 'To be confirmed')}")
+        if order.get("pickup_type") == "custom":
+            st.warning("Your requested location and time are not confirmed yet. Please wait for the store owner’s Gmail reply.")
         st.write(f"**Amount to pay at pickup:** NT${order['total']:,.0f}")
         st.caption(order["message"])
         st.write("Please pay in person when you pick up your order.")
