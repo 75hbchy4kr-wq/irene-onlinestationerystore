@@ -259,6 +259,50 @@ def send_pickup_email(to_address, username, order_id, total, pickup_date, pickup
     return send_email(to_address, subject, body)
 
 
+def send_owner_order_email(order_id):
+    """Notify the store owner about a newly placed order."""
+    owner_email = str(get_setting("OWNER_EMAIL", smtp_settings()[2])).strip()
+    if not owner_email:
+        return False, "OWNER_EMAIL is not set and SMTP_USER is empty."
+    with get_connection() as connection:
+        order = connection.execute(
+            """SELECT id, total, status, customer_email, pickup_date, pickup_time, pickup_location,
+                      fulfillment_method, customer_name, customer_phone, shipping_region, shipping_city,
+                      shipping_postal_code, shipping_address_line1, shipping_address_line2
+               FROM orders WHERE id = ?""", (int(order_id),)
+        ).fetchone()
+        items = connection.execute(
+            "SELECT product_name, quantity, price FROM order_items WHERE order_id = ? ORDER BY id",
+            (int(order_id),)
+        ).fetchall()
+    if not order:
+        return False, "Order not found."
+    item_lines = "\n".join(
+        f"- {item['product_name']} × {item['quantity']} — NT${float(item['price']) * int(item['quantity']):,.0f}"
+        for item in items
+    ) or "(No item details found)"
+    lines = [
+        f"Order number: #{order['id']}", f"Status: {order['status']}",
+        f"Order total: NT${float(order['total']):,.0f}",
+        f"Customer name: {order['customer_name'] or '(not provided)'}",
+        f"Customer phone: {order['customer_phone'] or '(not provided)'}",
+        f"Customer email: {order['customer_email'] or '(not provided)'}",
+        "", "Items:", item_lines, "",
+    ]
+    if order['fulfillment_method'] == "pickup":
+        lines += [f"Pickup date: {order['pickup_date'] or '(not set)'}",
+                  f"Pickup time: {order['pickup_time'] or '(not set)'}",
+                  f"Pickup location: {order['pickup_location'] or '(not set)'}"]
+    else:
+        lines += ["Fulfillment: Shipping",
+                  f"Region/city: {order['shipping_region'] or ''} {order['shipping_city'] or ''}",
+                  f"Postal code: {order['shipping_postal_code'] or ''}",
+                  f"Address: {order['shipping_address_line1'] or ''} {order['shipping_address_line2'] or ''}"]
+    return send_email(owner_email, f"NEW ORDER #{order['id']} — Irene's Online Store",
+                      "A new order needs your attention.\n\n" + "\n".join(lines) +
+                      "\n\nPlease check the admin Orders page and prepare the items.")
+
+
 def send_cancel_email(to_address, username, order_id, pickup_date):
     """Tell a customer that the store cancelled their pay-at-pickup order."""
     date_line = f"Pickup date was: {pickup_date}\n" if pickup_date else ""
@@ -413,7 +457,7 @@ def taipei_today():
 
 
 def school_pickup_slots(pickup_date):
-    """Return 30-minute school-gate pickup slots: weekdays 09:00–16:00, weekends 08:00–20:00."""
+    """Return 30-minute school-gate pickup slots for weekdays 09:00–16:00."""
     if pickup_date.weekday() < 5:
         start_hour, end_hour = 9, 16
     else:
@@ -445,6 +489,10 @@ def place_pickup_order(email_address, customer_name, customer_phone, pickup_date
         email_address.strip(), st.session_state.username, int(order_id), float(total),
         date_text, pickup_time, pickup_location, pickup_type,
     )
+    owner_sent, owner_reason = send_owner_order_email(int(order_id))
+    if owner_sent:
+        with get_connection() as connection:
+            connection.execute("UPDATE orders SET owner_email_sent = 1 WHERE id = ?", (int(order_id),))
     if sent:
         with get_connection() as connection:
             connection.execute("UPDATE orders SET email_sent = 1 WHERE id = ?", (int(order_id),))
@@ -453,6 +501,8 @@ def place_pickup_order(email_address, customer_name, customer_phone, pickup_date
         note = "No confirmation email was sent because email is not set up for this store yet."
     else:
         note = "Your order is placed, but the confirmation email could not be sent."
+    if not owner_sent:
+        note += " Store-owner email notification was not sent; check OWNER_EMAIL and Gmail SMTP settings."
     st.session_state.cart = {}
     st.session_state.stripe_checkout_url = None
     st.session_state.last_order = {
@@ -603,7 +653,7 @@ def handle_stripe_return():
 
         with get_connection() as connection:
             order = connection.execute(
-                """SELECT id, user_id, total, status, stripe_session_id, customer_email, email_sent, fulfillment_method, customer_name, customer_phone, shipping_region, shipping_city, shipping_postal_code, shipping_address_line1, shipping_address_line2 FROM orders WHERE id = ?""",
+                """SELECT id, user_id, total, status, stripe_session_id, customer_email, email_sent, owner_email_sent, fulfillment_method, customer_name, customer_phone, shipping_region, shipping_city, shipping_postal_code, shipping_address_line1, shipping_address_line2 FROM orders WHERE id = ?""",
                 (int(order_id),),
             ).fetchone()
             if (not order or str(order["user_id"]) != user_id
@@ -619,6 +669,15 @@ def handle_stripe_return():
             elif order["status"] != "Paid":
                 raise ValueError("This order is not awaiting payment.")
 
+        owner_email_message = ""
+        if not order["owner_email_sent"]:
+            owner_sent, owner_reason = send_owner_order_email(int(order_id))
+            if owner_sent:
+                with get_connection() as connection:
+                    connection.execute("UPDATE orders SET owner_email_sent = 1 WHERE id = ?", (int(order_id),))
+            else:
+                owner_email_message = " Store-owner notification could not be sent; check OWNER_EMAIL and Gmail SMTP settings."
+
         email_message = "Payment confirmed."
         if not order["email_sent"]:
             sent, email_message = send_order_email(
@@ -628,6 +687,7 @@ def handle_stripe_return():
             if sent:
                 with get_connection() as connection:
                     connection.execute("UPDATE orders SET email_sent = 1 WHERE id = ?", (int(order_id),))
+        email_message += owner_email_message
         st.session_state.cart = {}
         st.session_state.stripe_checkout_url = None
         st.session_state.last_order = {
@@ -879,7 +939,7 @@ def checkout_page():
         )
         if pickup_date.weekday() < 5:
             pickup_options = [
-                "School gate — LT Brown International School",
+                "School gate — LTBrown International School",
                 "Request a custom location (Gmail confirmation required)",
             ]
         else:
@@ -898,11 +958,10 @@ def checkout_page():
                 "Pickup time (Taiwan time)", pickup_slots,
                 key=f"school_pickup_time_{pickup_date.isoformat()}"
             )
-            pickup_location = "LT Brown International School gate"
+            pickup_location = "LTBrown International School gate"
             st.text_input("Pickup location", value=pickup_location, disabled=True)
             if pickup_date.weekday() < 5:
                 st.caption("School gate on weekdays (Mon–Fri): 09:00–16:00, in 30-minute slots.")
-            st.caption("School gate on weekdays (Mon–Fri): 09:00–16:00, in 30-minute slots.")
             st.caption("School-gate pickup is not available on Saturdays or Sundays.")
         else:
             pickup_location = st.text_input(
