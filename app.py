@@ -7,6 +7,7 @@ import bcrypt
 import stripe
 import streamlit as st
 
+from chatbot import MAX_QUESTION_LENGTH, answer_question, get_ai_config
 from database import create_tables, get_connection
 
 st.set_page_config(
@@ -98,6 +99,7 @@ def log_in(username, password):
         st.session_state.role = user["role"]
         st.session_state.page = "Store"
         st.session_state.cart = {}
+        st.session_state.chat_messages = []
         return True
     return False
 
@@ -108,6 +110,7 @@ def log_out():
     st.session_state.username = None
     st.session_state.role = None
     st.session_state.cart = {}
+    st.session_state.chat_messages = []
     st.session_state.page = "Store"
     st.rerun()
 
@@ -984,6 +987,74 @@ def auth_screen():
 
 
 # -----------------------------
+# AI SHOPPING ASSISTANT
+# -----------------------------
+CHAT_GREETING = (
+    "Hi! I'm the store assistant. Ask me if something is in stock, how much it costs, "
+    "how many are left, or for recommendations."
+)
+CHAT_EXAMPLES = [
+    "What products do you have?",
+    "How much are the cookies?",
+    "Can you recommend something similar?",
+]
+MAX_QUESTIONS_PER_SESSION = 30
+
+
+def chatbot_page():
+    st.title("💬 Shopping Assistant")
+    st.caption("Ask about products, prices, stock and recommendations. Answers use the store's live inventory.")
+
+    config = get_ai_config(get_setting)
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    messages = st.session_state.chat_messages
+
+    with st.chat_message("assistant"):
+        st.markdown(CHAT_GREETING)
+    for message in messages:
+        with st.chat_message(message["role"]):
+            # Escape "$" so prices like NT$30 are not shown as math formulas.
+            st.markdown(message["content"].replace("$", "\\$"))
+            if message.get("note"):
+                st.caption(message["note"])
+
+    asked = sum(1 for m in messages if m["role"] == "user")
+    limit_reached = asked >= MAX_QUESTIONS_PER_SESSION
+
+    if not messages:
+        columns = st.columns(len(CHAT_EXAMPLES))
+        for column, example in zip(columns, CHAT_EXAMPLES):
+            if column.button(example, key=f"chat_example_{example}"):
+                st.session_state.pending_question = example
+                st.rerun()
+
+    if limit_reached:
+        st.warning("You have reached the question limit for this session. Please log in again to continue.")
+
+    typed = st.chat_input(
+        "Ask about a product...",
+        max_chars=MAX_QUESTION_LENGTH,
+        disabled=limit_reached,
+    )
+    question = st.session_state.pop("pending_question", None) or typed
+    if not question or limit_reached:
+        return
+
+    history = [{"role": m["role"], "content": m["content"]} for m in messages]
+    messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question.replace("$", "\\$"))
+    with st.chat_message("assistant"):
+        with st.spinner("Checking the store inventory..."):
+            answer, note = answer_question(question, history, config)
+        st.markdown(answer.replace("$", "\\$"))
+        if note:
+            st.caption(note)
+    messages.append({"role": "assistant", "content": answer, "note": note})
+
+
+# -----------------------------
 # MAIN APP
 # -----------------------------
 if not st.session_state.logged_in:
@@ -1017,7 +1088,7 @@ if st.session_state.role == "admin":
         "Manage Inventory", "Delete Products", "All Orders"
     ]
 else:
-    page_options = ["Store", "Cart", "Order History"]
+    page_options = ["Store", "Cart", "Order History", "Assistant"]
 
 
 def sync_navigation():
@@ -1063,6 +1134,8 @@ else:
         cart_page()
     elif current_page == "Order History":
         order_history_page()
+    elif current_page == "Assistant":
+        chatbot_page()
     else:
         customer_store()
 
