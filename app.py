@@ -161,6 +161,49 @@ def send_order_email(to_address, username, order_id, total):
         return False, "Payment succeeded, but the confirmation email could not be sent. Check SMTP settings."
 
 
+def send_email(to_address, subject, body):
+    """Send an email with the SMTP settings in Streamlit Secrets.
+    Returns (True, "sent"), (False, "not_configured") or (False, "failed")."""
+    host = get_setting("SMTP_HOST", "")
+    try:
+        port = int(get_setting("SMTP_PORT", "587"))
+    except ValueError:
+        port = 587
+    smtp_user = get_setting("SMTP_USER", "")
+    smtp_password = get_setting("SMTP_PASSWORD", "")
+    from_address = get_setting("SMTP_FROM", smtp_user)
+    if not (host and smtp_user and smtp_password and from_address and to_address):
+        return False, "not_configured"
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_address
+    message["To"] = to_address
+    message.set_content(body)
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(message)
+        return True, "sent"
+    except Exception:
+        return False, "failed"
+
+
+def send_pickup_email(to_address, username, order_id, total, pickup_date):
+    """Email a confirmation for an order that will be paid in person at pickup."""
+    return send_email(
+        to_address,
+        f"Order confirmation (pay at pickup) — order #{order_id}",
+        f"Hi {username},\n\n"
+        "Thank you for shopping at Irene's Online Stationery Store!\n"
+        f"Your order #{order_id} has been placed and your items are reserved.\n"
+        f"Pickup date: {pickup_date}\n"
+        f"Amount to pay in person at pickup: NT${total:,.0f}\n\n"
+        "Please bring this email or your order number when you pick up your order.\n",
+    )
+
+
 # -----------------------------
 # DATA HELPERS
 # -----------------------------
@@ -281,12 +324,23 @@ def place_pickup_order(email_address, pickup_date):
     )
     if not ok:
         return False, message
+    sent, reason = send_pickup_email(
+        email_address.strip(), st.session_state.username, int(order_id), float(total), date_text
+    )
+    if sent:
+        with get_connection() as connection:
+            connection.execute("UPDATE orders SET email_sent = 1 WHERE id = ?", (int(order_id),))
+        note = f"A confirmation email was sent to {email_address.strip()}."
+    elif reason == "not_configured":
+        note = "No confirmation email was sent because email is not set up for this store yet."
+    else:
+        note = "Your order is placed, but the confirmation email could not be sent."
     st.session_state.cart = {}
     st.session_state.stripe_checkout_url = None
     st.session_state.last_order = {
         "id": int(order_id),
         "total": float(total),
-        "message": "Your items are reserved for you.",
+        "message": "Your items are reserved for you. " + note,
         "pickup": True,
         "pickup_date": date_text,
     }
