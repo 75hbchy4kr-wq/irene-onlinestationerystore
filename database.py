@@ -66,6 +66,7 @@ def create_tables():
             "customer_email": "ALTER TABLE orders ADD COLUMN customer_email TEXT NOT NULL DEFAULT ''",
             "stripe_session_id": "ALTER TABLE orders ADD COLUMN stripe_session_id TEXT",
             "email_sent": "ALTER TABLE orders ADD COLUMN email_sent INTEGER NOT NULL DEFAULT 0",
+            "owner_email_sent": "ALTER TABLE orders ADD COLUMN owner_email_sent INTEGER NOT NULL DEFAULT 0",
             "pickup_date": "ALTER TABLE orders ADD COLUMN pickup_date TEXT",
             "pickup_time": "ALTER TABLE orders ADD COLUMN pickup_time TEXT",
             "pickup_location": "ALTER TABLE orders ADD COLUMN pickup_location TEXT",
