@@ -1,4 +1,5 @@
 import os
+import re
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -456,13 +457,29 @@ def handle_stripe_return():
 # -----------------------------
 # CUSTOMER STORE
 # -----------------------------
+def image_urls(value):
+    """Split the image field into separate URLs (one per line, or separated by spaces/commas)."""
+    return [u for u in re.split(r"[\s,]+", (value or "").strip()) if u]
+
+
+def clean_image_field(value):
+    """Store several image URLs as one URL per line, or None when empty."""
+    return "\n".join(image_urls(value)) or None
+
+
+def go_to_page(page):
+    """Button callback that switches page and keeps the sidebar menu in sync."""
+    st.session_state.page = page
+    st.session_state.nav_radio = page
+
+
 def product_card(product):
     with st.container(border=True):
         col1, col2 = st.columns([1, 2])
         with col1:
-            if product["image_url"]:
+            for url in image_urls(product["image_url"]):
                 try:
-                    st.image(product["image_url"], use_container_width=True)
+                    st.image(url, use_container_width=True)
                 except Exception:
                     st.caption("Product image could not be loaded.")
         with col2:
@@ -491,6 +508,7 @@ def product_card(product):
 def customer_store():
     st.title("🛍️ Irene's Online Stationery Store")
     st.write("Find something lovely for your desk, notes, and next big idea.")
+    st.button("💬 Ask our AI assistant", on_click=go_to_page, args=("Assistant",))
 
     products = fetch_products()
     if not products:
@@ -726,7 +744,7 @@ def admin_add_product():
         price = st.number_input("Price (NT$)", min_value=0.0, value=100.0, step=10.0)
         inventory = st.number_input("Starting inventory", min_value=0, value=0, step=1)
         category = st.selectbox("Category", CATEGORIES)
-        image_url = st.text_input("Image URL (optional)")
+        image_url = st.text_area("Image URLs (optional, one per line, you can add two or more)")
         submitted = st.form_submit_button("Add Product")
     if submitted:
         if not name.strip():
@@ -737,7 +755,7 @@ def admin_add_product():
                     INSERT INTO products (name, description, price, inventory, image_url, category)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (name.strip(), description.strip(), float(price), int(inventory),
-                      image_url.strip() or None, category))
+                      clean_image_field(image_url), category))
             st.success(f"{name.strip()} added successfully.")
             st.rerun()
 
@@ -771,7 +789,10 @@ def admin_edit_products():
             category_options,
             index=category_options.index(product["category"]),
         )
-        image_url = st.text_input("Image URL", value=product["image_url"] or "")
+        image_url = st.text_area(
+            "Image URLs (one per line, you can add two or more)",
+            value=product["image_url"] or "",
+        )
         submitted = st.form_submit_button("Save Changes")
     if submitted:
         if not name.strip():
@@ -784,7 +805,7 @@ def admin_edit_products():
                         image_url = ?, category = ?
                     WHERE id = ?
                 """, (name.strip(), description.strip(), float(price), int(inventory),
-                      image_url.strip() or None, category, product["id"]))
+                      clean_image_field(image_url), category, product["id"]))
             st.success("Product updated.")
             st.rerun()
 
@@ -1085,7 +1106,7 @@ st.sidebar.caption(f"Role: {st.session_state.role.title()}")
 if st.session_state.role == "admin":
     page_options = [
         "Store Preview", "Add Product", "Edit Products",
-        "Manage Inventory", "Delete Products", "All Orders"
+        "Manage Inventory", "Delete Products", "All Orders", "Assistant"
     ]
 else:
     page_options = ["Store", "Cart", "Order History", "Assistant"]
@@ -1123,6 +1144,8 @@ if st.session_state.role == "admin":
         admin_delete_products()
     elif current_page == "All Orders":
         admin_orders()
+    elif current_page == "Assistant":
+        chatbot_page()
     else:
         customer_store()
 else:
