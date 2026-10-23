@@ -227,7 +227,7 @@ def check_email_settings(to_address):
     return True, f"Test email sent to {to_address} from {sender}. Check the inbox and the spam folder."
 
 
-def send_pickup_email(to_address, username, order_id, total, pickup_date):
+def send_pickup_email(to_address, username, order_id, total, pickup_date, pickup_time, pickup_location):
     """Email a confirmation for an order that will be paid in person at pickup."""
     return send_email(
         to_address,
@@ -236,6 +236,8 @@ def send_pickup_email(to_address, username, order_id, total, pickup_date):
         "Thank you for shopping at Irene's Online Store!\n"
         f"Your order #{order_id} has been placed and your items are reserved.\n"
         f"Pickup date: {pickup_date}\n"
+        f"Pickup time: {pickup_time}\n"
+        f"Pickup location: {pickup_location}\n"
         f"Amount to pay in person at pickup: NT${total:,.0f}\n\n"
         "Please bring this email or your order number when you pick up your order.\n",
     )
@@ -310,8 +312,22 @@ def stripe_secret_key():
     return get_setting("STRIPE_SECRET_KEY", "").strip()
 
 
-def create_pending_order(email_address, status="Pending payment", pickup_date=None):
-    """Reserve stock and create an order (pending Stripe payment, or pay at pickup)."""
+def create_pending_order(
+    email_address,
+    status="Pending payment",
+    pickup_date=None,
+    pickup_time=None,
+    pickup_location=None,
+    fulfillment_method="pickup",
+    customer_name=None,
+    customer_phone=None,
+    shipping_region=None,
+    shipping_city=None,
+    shipping_postal_code=None,
+    shipping_address_line1=None,
+    shipping_address_line2=None,
+):
+    """Reserve stock and save a complete order record."""
     cart = st.session_state.cart
     if not cart:
         return False, "Your cart is empty.", None, 0.0
@@ -338,13 +354,25 @@ def create_pending_order(email_address, status="Pending payment", pickup_date=No
                         f"Not enough stock for {product['name']}. "
                         f"Only {product['inventory']} remain. Please update your cart."
                     ), None, 0.0
-                price = round(float(product["price"]), 2)
+                price = round(float(product["price"]))
                 total += price * quantity
                 line_items.append((product, quantity, price))
 
             cursor.execute(
-                "INSERT INTO orders (user_id, total, status, customer_email, pickup_date) VALUES (?, ?, ?, ?, ?)",
-                (st.session_state.user_id, round(total, 2), status, email_address.strip(), pickup_date),
+                """INSERT INTO orders (
+                    user_id, total, status, customer_email, pickup_date, pickup_time,
+                    pickup_location, fulfillment_method, customer_name, customer_phone,
+                    shipping_region, shipping_city, shipping_postal_code,
+                    shipping_address_line1, shipping_address_line2
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    st.session_state.user_id, round(total), status, email_address.strip(),
+                    pickup_date, pickup_time, pickup_location, fulfillment_method,
+                    (customer_name or "").strip(), (customer_phone or "").strip(),
+                    (shipping_region or "").strip(), (shipping_city or "").strip(),
+                    (shipping_postal_code or "").strip(),
+                    (shipping_address_line1 or "").strip(), (shipping_address_line2 or "").strip(),
+                ),
             )
             order_id = cursor.lastrowid
             for product, quantity, price in line_items:
@@ -358,7 +386,7 @@ def create_pending_order(email_address, status="Pending payment", pickup_date=No
                     "INSERT INTO order_items (order_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?)",
                     (order_id, product["id"], product["name"], quantity, price),
                 )
-        return True, "Pending order created.", order_id, round(total, 2)
+        return True, "Pending order created.", order_id, round(total)
     except Exception as exc:
         return False, f"Could not start checkout: {exc}", None, 0.0
 
@@ -368,16 +396,24 @@ def taipei_today():
     return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
 
 
-def place_pickup_order(email_address, pickup_date):
-    """Create an order that will be paid in person on the chosen pickup date."""
+def place_pickup_order(email_address, customer_name, customer_phone, pickup_date, pickup_time, pickup_location):
+    """Create an order that will be paid in person on the chosen date and time."""
     date_text = pickup_date.isoformat()
     ok, message, order_id, total = create_pending_order(
-        email_address, status="Pay at pickup", pickup_date=date_text
+        email_address,
+        status="Pay at pickup",
+        pickup_date=date_text,
+        pickup_time=pickup_time,
+        pickup_location=pickup_location,
+        fulfillment_method="pickup",
+        customer_name=customer_name,
+        customer_phone=customer_phone,
     )
     if not ok:
         return False, message
     sent, reason = send_pickup_email(
-        email_address.strip(), st.session_state.username, int(order_id), float(total), date_text
+        email_address.strip(), st.session_state.username, int(order_id), float(total),
+        date_text, pickup_time, pickup_location,
     )
     if sent:
         with get_connection() as connection:
@@ -395,6 +431,8 @@ def place_pickup_order(email_address, pickup_date):
         "message": "Your items are reserved for you. " + note,
         "pickup": True,
         "pickup_date": date_text,
+        "pickup_time": pickup_time,
+        "pickup_location": pickup_location,
     }
     st.session_state.page = "Order Confirmation"
     return True, "Order placed."
@@ -433,8 +471,8 @@ def release_pending_order(order_id, expire_stripe_session=True):
         )
 
 
-def start_stripe_checkout(email_address):
-    """Create a Stripe-hosted Checkout Session from server-side cart prices."""
+def start_stripe_checkout(email_address, customer_name, customer_phone, shipping_info):
+    """Create a Stripe-hosted Checkout Session and save the customer's shipping address."""
     key = stripe_secret_key()
     app_url = get_setting("APP_URL", "").strip().rstrip("/")
     if not key:
@@ -442,7 +480,18 @@ def start_stripe_checkout(email_address):
     if not app_url.startswith("https://"):
         return False, "Add your deployed app's HTTPS URL as APP_URL in Streamlit Secrets.", None
 
-    ok, message, order_id, total = create_pending_order(email_address)
+    ok, message, order_id, total = create_pending_order(
+        email_address,
+        status="Pending payment",
+        fulfillment_method="shipping",
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        shipping_region=shipping_info["region"],
+        shipping_city=shipping_info["city"],
+        shipping_postal_code=shipping_info["postal_code"],
+        shipping_address_line1=shipping_info["address_line1"],
+        shipping_address_line2=shipping_info["address_line2"],
+    )
     if not ok:
         return False, message, None
 
@@ -453,12 +502,14 @@ def start_stripe_checkout(email_address):
                 "SELECT product_name, quantity, price FROM order_items WHERE order_id = ? ORDER BY id",
                 (order_id,),
             ).fetchall()
+        # TWD is a zero-decimal currency in Stripe: unit_amount is an integer in NT dollars,
+        # not multiplied by 100 as it would be for USD.
         line_items = [
             {
                 "price_data": {
                     "currency": "twd",
                     "product_data": {"name": item["product_name"]},
-                    "unit_amount": int(round(float(item["price"]) * 100)),
+                    "unit_amount": int(round(float(item["price"]))),
                 },
                 "quantity": int(item["quantity"]),
             }
@@ -521,12 +572,12 @@ def handle_stripe_return():
 
         with get_connection() as connection:
             order = connection.execute(
-                "SELECT id, user_id, total, status, stripe_session_id, customer_email, email_sent FROM orders WHERE id = ?",
+                """SELECT id, user_id, total, status, stripe_session_id, customer_email, email_sent, fulfillment_method, customer_name, customer_phone, shipping_region, shipping_city, shipping_postal_code, shipping_address_line1, shipping_address_line2 FROM orders WHERE id = ?""",
                 (int(order_id),),
             ).fetchone()
             if (not order or str(order["user_id"]) != user_id
                     or order["stripe_session_id"] != session_id
-                    or int(checkout.get("amount_total") or 0) != int(round(float(order["total"]) * 100))
+                    or int(checkout.get("amount_total") or 0) != int(round(float(order["total"])))
                     or checkout.get("currency") != "twd"):
                 raise ValueError("The payment details do not match this order.")
             if order["status"] == "Pending payment":
@@ -550,6 +601,12 @@ def handle_stripe_return():
         st.session_state.stripe_checkout_url = None
         st.session_state.last_order = {
             "id": int(order_id), "total": float(order["total"]), "message": email_message,
+            "pickup": False, "fulfillment_method": order["fulfillment_method"],
+            "customer_name": order["customer_name"], "customer_phone": order["customer_phone"],
+            "shipping_region": order["shipping_region"], "shipping_city": order["shipping_city"],
+            "shipping_postal_code": order["shipping_postal_code"],
+            "shipping_address_line1": order["shipping_address_line1"],
+            "shipping_address_line2": order["shipping_address_line2"],
         }
         st.session_state.page = "Order Confirmation"
         st.query_params.clear()
@@ -713,7 +770,7 @@ def cart_page():
 # CHECKOUT
 # -----------------------------
 def checkout_page():
-    st.title("💳 Secure Checkout")
+    st.title("💳 Checkout")
     rows = get_cart_rows()
     if not rows:
         st.info("Your cart is empty.")
@@ -727,49 +784,95 @@ def checkout_page():
     for row in rows:
         st.write(f"- {row['name']} × {row['quantity']} — NT${row['line_total']:,.0f}")
     st.markdown(f"### Total: NT${total:,.0f}")
-    st.caption("Card details are entered on Stripe's secure hosted checkout page, not in this app.")
     email_address = st.text_input(
-        "Email for your order confirmation",
-        placeholder="you@example.com",
-        key="checkout_email",
+        "Email for your order confirmation", placeholder="you@example.com", key="checkout_email"
     )
     payment_choice = st.radio(
-        "Payment method",
-        ["Pay online by card (Stripe)", "Pay in person at pickup"],
+        "How would you like to receive and pay for your order?",
+        ["Online payment + ship to my address", "Pay in person at pickup"],
         key="payment_choice",
     )
 
-    if payment_choice.startswith("Pay online"):
+    if payment_choice.startswith("Online payment"):
+        st.subheader("Shipping information")
+        st.caption("Enter the address where you want the order delivered. Your address will be saved with this order.")
+        customer_name = st.text_input("Recipient full name", key="shipping_customer_name")
+        customer_phone = st.text_input("Contact phone number", key="shipping_customer_phone")
+        shipping_region = st.text_input("County / City (縣市)", key="shipping_region", placeholder="e.g. Taipei City")
+        shipping_city = st.text_input("District / Township (區／鄉鎮)", key="shipping_city", placeholder="e.g. Banqiao District")
+        shipping_postal_code = st.text_input("Postal code (郵遞區號)", key="shipping_postal_code")
+        shipping_address_line1 = st.text_input("Street address / building and number (詳細地址)", key="shipping_address_line1")
+        shipping_address_line2 = st.text_input("Floor, room, or delivery notes (optional)", key="shipping_address_line2")
+        st.caption("Shipping fees are not included in this demo; confirm any delivery fee before using this store with real customers.")
         if st.button("Continue to Secure Payment", type="primary"):
-            ok, message, checkout_url = start_stripe_checkout(email_address)
-            if ok:
-                st.session_state.stripe_checkout_url = checkout_url
-                st.rerun()
+            required = {
+                "email": email_address.strip() if "@" in email_address else "",
+                "recipient name": customer_name.strip(),
+                "contact phone": customer_phone.strip(),
+                "county / city": shipping_region.strip(),
+                "district / township": shipping_city.strip(),
+                "street address": shipping_address_line1.strip(),
+            }
+            missing = [label for label, value in required.items() if not value]
+            if missing:
+                st.error("Please complete these fields before continuing: " + ", ".join(missing) + ".")
             else:
-                st.error(message)
+                shipping_info = {
+                    "region": shipping_region,
+                    "city": shipping_city,
+                    "postal_code": shipping_postal_code,
+                    "address_line1": shipping_address_line1,
+                    "address_line2": shipping_address_line2,
+                }
+                ok, message, checkout_url = start_stripe_checkout(
+                    email_address, customer_name, customer_phone, shipping_info
+                )
+                if ok:
+                    st.session_state.stripe_checkout_url = checkout_url
+                    st.rerun()
+                else:
+                    st.error(message)
 
         checkout_url = st.session_state.get("stripe_checkout_url")
         if checkout_url:
             st.link_button("Open Stripe Checkout", checkout_url, type="primary", use_container_width=True)
             st.caption("Your stock is temporarily reserved while this payment is pending. If you cancel, it will be released.")
     else:
-        st.info("Your items will be reserved. Please pay in person when you pick up your order.")
+        st.info("Your items will be reserved. Pay in person when you meet to collect your order.")
+        customer_name = st.text_input("Your full name", key="pickup_customer_name")
+        customer_phone = st.text_input("Contact phone number", key="pickup_customer_phone")
         earliest = taipei_today() + timedelta(days=1)
         latest = earliest + timedelta(days=13)
         pickup_date = st.date_input(
-            "Pickup date",
-            value=earliest,
-            min_value=earliest,
-            max_value=latest,
-            key="pickup_date_input",
+            "Pickup date", value=earliest, min_value=earliest, max_value=latest, key="pickup_date_input"
         )
-        st.caption("Choose a pickup date within the next 14 days.")
+        configured_slots = str(get_setting(
+            "PICKUP_TIME_SLOTS",
+            "12:00–12:15,12:15–12:30,12:30–12:45,15:30–15:45,15:45–16:00,16:00–16:15,16:15–16:30"
+        ))
+        pickup_slots = [slot.strip() for slot in configured_slots.split(",") if slot.strip()]
+        pickup_time = st.selectbox("Pickup time", pickup_slots, key="pickup_time_input")
+        pickup_location = str(get_setting(
+            "PICKUP_LOCATION",
+            "School public area approved by the school; exact meeting point to be confirmed by email"
+        )).strip()
+        st.text_input("Pickup location", value=pickup_location, disabled=True, help="The store administrator sets this in Streamlit Secrets.")
+        st.caption("Only arrange a school pickup in a place and time permitted by your school. Confirm the meeting details by email if needed.")
         if st.button("Place Order (Pay at Pickup)", type="primary"):
-            ok, message = place_pickup_order(email_address, pickup_date)
-            if ok:
-                st.rerun()
+            if not email_address.strip() or "@" not in email_address:
+                st.error("Please enter a valid email address.")
+            elif not customer_name.strip() or not customer_phone.strip():
+                st.error("Please enter your name and contact phone number.")
+            elif not pickup_location:
+                st.error("The store administrator must configure a pickup location first.")
             else:
-                st.error(message)
+                ok, message = place_pickup_order(
+                    email_address, customer_name, customer_phone, pickup_date, pickup_time, pickup_location
+                )
+                if ok:
+                    st.rerun()
+                else:
+                    st.error(message)
 
     if st.button("← Back to Cart"):
         st.session_state.page = "Cart"
@@ -783,14 +886,19 @@ def order_confirmation_page():
         st.info("No recent order confirmation is available in this session.")
     elif order.get("pickup"):
         st.success(f"Order #{order['id']} has been placed!")
-        if order.get("pickup_date"):
-            st.write(f"**Pickup date:** {order['pickup_date']}")
+        st.write(f"**Pickup date:** {order.get('pickup_date', 'To be confirmed')}")
+        st.write(f"**Pickup time:** {order.get('pickup_time', 'To be confirmed')}")
+        st.write(f"**Pickup location:** {order.get('pickup_location', 'To be confirmed')}")
         st.write(f"**Amount to pay at pickup:** NT${order['total']:,.0f}")
         st.caption(order["message"])
         st.write("Please pay in person when you pick up your order.")
     else:
         st.success(f"Payment confirmed for order #{order['id']}!")
         st.write(f"**Order total:** NT${order['total']:,.0f}")
+        st.write("**Delivery address:**")
+        st.write(f"{order.get('customer_name', '')} · {order.get('customer_phone', '')}")
+        st.write(f"{order.get('shipping_region', '')} {order.get('shipping_city', '')} {order.get('shipping_postal_code', '')}")
+        st.write(f"{order.get('shipping_address_line1', '')} {order.get('shipping_address_line2', '') or ''}")
         st.caption(order["message"])
         st.write("Your order is now recorded as paid.")
     if st.button("Continue Shopping", type="primary"):
@@ -805,7 +913,9 @@ def order_history_page():
     st.title("📜 My Order History")
     with get_connection() as connection:
         orders = connection.execute("""
-            SELECT id, total, status, created_at, pickup_date
+            SELECT id, total, status, created_at, pickup_date, pickup_time, pickup_location,
+                   fulfillment_method, customer_name, customer_phone, shipping_region, shipping_city,
+                   shipping_postal_code, shipping_address_line1, shipping_address_line2
             FROM orders
             WHERE user_id = ?
             ORDER BY created_at DESC, id DESC
@@ -829,8 +939,18 @@ def order_history_page():
             f"Order #{order['id']} · NT${float(order['total']):,.0f} · {order['created_at']}"
         ):
             st.write(f"**Status:** {order['status']}")
-            if order["pickup_date"]:
-                st.write(f"**Pickup date:** {order['pickup_date']}")
+            if order["fulfillment_method"] == "pickup":
+                if order["pickup_date"]:
+                    st.write(f"**Pickup date:** {order['pickup_date']}")
+                if order["pickup_time"]:
+                    st.write(f"**Pickup time:** {order['pickup_time']}")
+                if order["pickup_location"]:
+                    st.write(f"**Pickup location:** {order['pickup_location']}")
+            elif order["fulfillment_method"] == "shipping":
+                st.write("**Delivery address:**")
+                st.write(f"{order['customer_name'] or ''} · {order['customer_phone'] or ''}")
+                st.write(f"{order['shipping_region'] or ''} {order['shipping_city'] or ''} {order['shipping_postal_code'] or ''}")
+                st.write(f"{order['shipping_address_line1'] or ''} {order['shipping_address_line2'] or ''}")
             for item in order_items[order["id"]]:
                 st.write(
                     f"- {item['product_name']} × {item['quantity']} "
@@ -1036,7 +1156,10 @@ def admin_orders():
     with get_connection() as connection:
         orders = connection.execute("""
             SELECT orders.id, users.username, orders.total, orders.status,
-                   orders.created_at, orders.customer_email, orders.pickup_date
+                   orders.created_at, orders.customer_email, orders.pickup_date, orders.pickup_time,
+                   orders.pickup_location, orders.fulfillment_method, orders.customer_name,
+                   orders.customer_phone, orders.shipping_region, orders.shipping_city,
+                   orders.shipping_postal_code, orders.shipping_address_line1, orders.shipping_address_line2
             FROM orders
             JOIN users ON users.id = orders.user_id
             ORDER BY orders.created_at DESC, orders.id DESC
@@ -1050,8 +1173,22 @@ def admin_orders():
         ):
             st.write(f"**Date:** {order['created_at']}")
             st.write(f"**Status:** {order['status']}")
-            if order["pickup_date"]:
-                st.write(f"**Pickup date:** {order['pickup_date']}")
+            if order["fulfillment_method"] == "pickup":
+                if order["pickup_date"]:
+                    st.write(f"**Pickup date:** {order['pickup_date']}")
+                if order["pickup_time"]:
+                    st.write(f"**Pickup time:** {order['pickup_time']}")
+                if order["pickup_location"]:
+                    st.write(f"**Pickup location:** {order['pickup_location']}")
+                if order["customer_name"]:
+                    st.write(f"**Customer name:** {order['customer_name']}")
+                if order["customer_phone"]:
+                    st.write(f"**Customer phone:** {order['customer_phone']}")
+            elif order["fulfillment_method"] == "shipping":
+                st.write("**Shipping details:**")
+                st.write(f"{order['customer_name'] or ''} · {order['customer_phone'] or ''}")
+                st.write(f"{order['shipping_region'] or ''} {order['shipping_city'] or ''} {order['shipping_postal_code'] or ''}")
+                st.write(f"{order['shipping_address_line1'] or ''} {order['shipping_address_line2'] or ''}")
             if order["customer_email"]:
                 st.write(f"**Customer email:** {order['customer_email']}")
             with get_connection() as connection:
