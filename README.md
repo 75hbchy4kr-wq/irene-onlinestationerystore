@@ -11,19 +11,13 @@ This update is based on your current app.py/database.py and keeps the existing c
 
 ## New checkout behavior
 - Online payment + shipping: customer enters recipient name, phone, county/city, district/township, postal code (optional), street address, and optional floor/room notes. These are saved to the order and shown to the admin.
-- Pay in person at pickup: customer enters name and phone, chooses a date and a time slot. Pickup location is set by the store owner in Streamlit Secrets.
-- Customer order history and order confirmation display the relevant shipping/pickup details.
-- Pickup confirmation email includes date, time, and location.
+- Pay in person has two options: (1) LT Brown International School gate, with 30-minute slots; (2) custom location request, which must be confirmed by Gmail.
+- School gate hours use Taiwan time: Monday–Friday 19:00–21:00; Saturday–Sunday 08:00–20:00. Each slot is 30 minutes, and there is no per-slot customer limit.
+- A school-gate order automatically sends an email with the selected date, time, and school-gate location. A custom-location order automatically sends an email acknowledging the request and clearly stating that the requested location/time are pending the store owner's reply.
+- Customer order history and admin order views display the relevant shipping/pickup details.
 
-## Configure pickup location/time slots
-In Streamlit Community Cloud: Manage app → Settings → Secrets. Add or adjust:
-
-```toml
-PICKUP_LOCATION = "A school-approved public meeting area; confirm the exact point by email"
-PICKUP_TIME_SLOTS = "12:00–12:15,12:15–12:30,12:30–12:45,15:30–15:45,15:45–16:00,16:00–16:15,16:15–16:30"
-```
-
-Choose times and locations that are actually allowed by your school. The defaults are examples; change them to match your schedule. If your Streamlit Secrets already has Stripe and Gmail SMTP settings, keep those existing entries and add these two settings underneath them.
+## Pickup settings
+The school pickup location and times are built into the app. No `PICKUP_LOCATION` or `PICKUP_TIME_SLOTS` secret is required for this version. Keep your existing Stripe and Gmail SMTP secrets unchanged. Only offer school pickup at a time and place allowed by the school.
 
 ## Important Stripe currency fix
 Your product prices are in NT dollars and Stripe uses `twd`. TWD is a zero-decimal currency in Stripe, so this version uses whole NT dollars for `unit_amount` and for payment verification rather than multiplying by 100. Test with Stripe test mode before using real payments.
